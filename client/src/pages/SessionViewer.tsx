@@ -98,9 +98,36 @@ export const SessionViewer: React.FC = () => {
         const display = client.getDisplay();
         const displayElement = display.getElement();
 
+        let observer: MutationObserver | null = null;
+
         if (containerRef.current) {
           containerRef.current.innerHTML = '';
+          displayElement.classList.add('guacamole-display');
+          displayElement.style.zIndex = '1';
           containerRef.current.appendChild(displayElement);
+
+          // Force z-index on canvas layers (overrides guacamole-common-js inline z-index: -1)
+          const enforceCanvasZIndex = () => {
+            if (containerRef.current) {
+              containerRef.current.querySelectorAll('canvas').forEach((canvas) => {
+                canvas.style.setProperty('z-index', '1', 'important');
+              });
+            }
+          };
+
+          enforceCanvasZIndex();
+
+          // MutationObserver catches dynamically painted / allocated canvas layers immediately without delay
+          observer = new MutationObserver(() => {
+            enforceCanvasZIndex();
+          });
+
+          observer.observe(containerRef.current, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['style'],
+          });
         }
 
         // Connection state handling
@@ -300,7 +327,7 @@ export const SessionViewer: React.FC = () => {
       {/* 2. Guacamole Canvas Viewport */}
       <div
         ref={containerRef}
-        className="w-full h-full flex items-center justify-center overflow-hidden cursor-default"
+        className="guac-viewport w-full h-full flex items-center justify-center overflow-hidden cursor-default"
       />
 
       {/* 3. Connecting / Error Overlays */}

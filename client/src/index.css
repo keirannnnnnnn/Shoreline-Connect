@@ -41,3 +41,10 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Fix guacamole-common-js inline z-index: -1 on internal canvas layers */
+.guac-viewport canvas,
+.guac-viewport div,
+.guacamole-display canvas {
+  z-index: 1 !important;
+}
