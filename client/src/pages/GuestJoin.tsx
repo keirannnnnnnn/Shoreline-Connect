@@ -32,7 +32,16 @@ export const GuestJoin: React.FC = () => {
           handleConnectDirect();
         }
       } else {
-        setExpiredState(res.message || 'This guest share link has expired.');
+        const getExpirationMessage = (reason?: string, msg?: string) => {
+          if (msg) return msg;
+          switch (reason) {
+            case 'expired': return 'This guest share link has expired.';
+            case 'revoked': return 'This share link was revoked by the owner.';
+            case 'max_uses_reached': return 'This guest link has reached its maximum connection limit.';
+            default: return 'This guest share link has expired or is no longer available.';
+          }
+        };
+        setExpiredState(getExpirationMessage(res.reason, res.message));
       }
     } catch (err: any) {
       setExpiredState(err.message || 'This guest share link has expired or is no longer available.');

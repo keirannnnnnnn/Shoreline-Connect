@@ -102,7 +102,7 @@ export const api = {
       fetchJson<{ guestShares: GuestShare[] }>('/shares/guest/my'),
 
     getPublicGuestShare: (token: string) =>
-      fetchJson<{ valid: boolean; reason?: string; share?: any }>('/shares/guest/public/' + token),
+      fetchJson<{ valid: boolean; reason?: string; message?: string; share?: any }>('/shares/guest/public/' + token),
     verifyGuestPinAndConnect: (token: string, pin?: string) =>
       fetchJson<{ token: string; device: { id: string; name: string; protocol: string } }>('/shares/guest/public/' + token + '/verify', {
         method: 'POST',

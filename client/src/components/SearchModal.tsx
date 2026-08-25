@@ -33,14 +33,24 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  const folderMap = new Map(folders.map((f) => [f.id, f]));
+  const lowerQuery = query.toLowerCase().trim();
 
-  const filteredDevices = devices.filter(d =>
-    d.name.toLowerCase().includes(query.toLowerCase()) ||
-    d.host.toLowerCase().includes(query.toLowerCase()) ||
-    d.protocol.toLowerCase().includes(query.toLowerCase()) ||
-    (d.folder_name && d.folder_name.toLowerCase().includes(query.toLowerCase()))
+  // Find matching folders
+  const matchingFolderIds = new Set(
+    folders
+      .filter((f) => f.name.toLowerCase().includes(lowerQuery))
+      .map((f) => f.id)
   );
+
+  const filteredDevices = devices.filter((d) => {
+    if (!lowerQuery) return true;
+    const nameMatch = d.name.toLowerCase().includes(lowerQuery);
+    const hostMatch = d.host.toLowerCase().includes(lowerQuery);
+    const protoMatch = d.protocol.toLowerCase().includes(lowerQuery);
+    const folderNameMatch = (d.folder_name && d.folder_name.toLowerCase().includes(lowerQuery)) || (d.folder_id && matchingFolderIds.has(d.folder_id));
+    return nameMatch || hostMatch || protoMatch || folderNameMatch;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 p-4">
@@ -68,43 +78,58 @@ export const SearchModal: React.FC<SearchModalProps> = ({
               No matching devices found for "{query}"
             </div>
           ) : (
-            filteredDevices.map((d) => (
-              <div
-                key={d.id}
-                onClick={() => {
-                  onClose();
-                  navigate(`/session/${d.id}`);
-                }}
-                className="flex items-center justify-between p-3 rounded-2xl hover:bg-surface-hover cursor-pointer transition-colors group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold ${
-                    d.protocol === 'rdp' ? 'bg-blue-500/10 text-blue-400' :
-                    d.protocol === 'ssh' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
-                  }`}>
-                    <SymbolIcon
-                      name={d.protocol === 'rdp' ? 'display' : d.protocol === 'ssh' ? 'terminal' : 'display.2'}
-                      className="w-4 h-4"
-                    />
+            filteredDevices.map((d) => {
+              const matchedFolder = d.folder_id ? folderMap.get(d.folder_id) : null;
+              return (
+                <div
+                  key={d.id}
+                  onClick={() => {
+                    onClose();
+                    navigate(`/session/${d.id}`);
+                  }}
+                  className="flex items-center justify-between p-3 rounded-2xl hover:bg-surface-hover cursor-pointer transition-colors group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold ${
+                      d.protocol === 'rdp' ? 'bg-blue-500/10 text-blue-400' :
+                      d.protocol === 'ssh' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
+                    }`}>
+                      <SymbolIcon
+                        name={d.protocol === 'rdp' ? 'display' : d.protocol === 'ssh' ? 'terminal' : 'display.2'}
+                        className="w-4 h-4"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-200 group-hover:text-white">{d.name}</p>
+                      <p className="text-xs text-slate-400 font-mono">{d.host}:{d.port}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold text-slate-200 group-hover:text-white">{d.name}</p>
-                    <p className="text-xs text-slate-400 font-mono">{d.host}:{d.port}</p>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-2">
-                  {d.folder_name && (
-                    <span className="px-2 py-0.5 text-[10px] rounded-md bg-surface text-slate-400 border border-surface-border">
-                      {d.folder_name}
+                  <div className="flex items-center gap-2">
+                    {matchedFolder ? (
+                      <span
+                        className="px-2 py-0.5 text-[10px] rounded-md border flex items-center gap-1 font-medium"
+                        style={{
+                          backgroundColor: `${matchedFolder.color}15`,
+                          borderColor: `${matchedFolder.color}30`,
+                          color: matchedFolder.color,
+                        }}
+                      >
+                        <SymbolIcon name={matchedFolder.icon || 'folder.fill'} className="w-2.5 h-2.5" />
+                        <span>{matchedFolder.name}</span>
+                      </span>
+                    ) : d.folder_name ? (
+                      <span className="px-2 py-0.5 text-[10px] rounded-md bg-surface text-slate-400 border border-surface-border">
+                        {d.folder_name}
+                      </span>
+                    ) : null}
+                    <span className="text-xs text-brand-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 font-semibold">
+                      Connect <SymbolIcon name="arrow.right" className="w-3 h-3" />
                     </span>
-                  )}
-                  <span className="text-xs text-brand-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 font-semibold">
-                    Connect <SymbolIcon name="arrow.right" className="w-3 h-3" />
-                  </span>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

@@ -201,6 +201,40 @@ export const SessionViewer: React.FC = () => {
     };
   }, [id, guestToken, location.state]);
 
+  // Apply display scaling
+  const applyScale = (mode: 'fit' | 'native') => {
+    if (!clientRef.current) return;
+    const display = clientRef.current.getDisplay();
+    if (!display) return;
+
+    if (mode === 'fit') {
+      const dispWidth = display.getWidth();
+      const dispHeight = display.getHeight();
+      if (dispWidth > 0 && dispHeight > 0) {
+        const scale = Math.min(window.innerWidth / dispWidth, window.innerHeight / dispHeight);
+        display.scale(scale);
+      }
+    } else {
+      display.scale(1.0);
+    }
+  };
+
+  const handleToggleScaleMode = () => {
+    const nextMode = scaleMode === 'fit' ? 'native' : 'fit';
+    setScaleMode(nextMode);
+    applyScale(nextMode);
+  };
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (scaleMode === 'fit' && clientRef.current) {
+        applyScale('fit');
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [scaleMode]);
+
   // Send Ctrl+Alt+Del
   const handleSendCtrlAltDel = () => {
     if (!clientRef.current) return;
@@ -287,6 +321,14 @@ export const SessionViewer: React.FC = () => {
                 Ctrl+Alt+Del
               </button>
             )}
+
+            <button
+              onClick={handleToggleScaleMode}
+              className="p-1.5 rounded-lg bg-surface-active hover:bg-surface-hover border border-surface-border text-slate-300 hover:text-white transition-colors"
+              title={scaleMode === 'fit' ? 'Scale: Fit to Window (Click for 1:1)' : 'Scale: 1:1 Native Resolution (Click to Fit)'}
+            >
+              <SymbolIcon name={scaleMode === 'fit' ? 'aspectratio' : 'arrow.up.left.and.down.right.magnifyingglass'} className="w-4 h-4" />
+            </button>
 
             <button
               onClick={() => setIsClipboardModalOpen(true)}
