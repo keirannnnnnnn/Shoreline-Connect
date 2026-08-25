@@ -48,23 +48,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
               <SymbolIcon name="macbook.and.iphone" className="w-4 h-4" />
               <span>Devices</span>
             </Link>
-
-            <Link
-              to="/settings"
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                location.pathname.startsWith('/settings')
-                  ? 'bg-surface-active text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
-              }`}
-            >
-              <SymbolIcon name="gearshape.fill" className="w-4 h-4" />
-              <span>Settings</span>
-              {isAdmin && (
-                <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-brand-500/20 text-brand-400 border border-brand-500/30 rounded-md">
-                  Admin
-                </span>
-              )}
-            </Link>
           </nav>
         </div>
 
