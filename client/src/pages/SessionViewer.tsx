@@ -195,6 +195,61 @@ export const SessionViewer: React.FC = () => {
         tunnelRef.current = tunnel;
         clientRef.current = client;
 
+        // Clipboard stream accumulator
+        const clipboardStreams: Record<string, { mimetype: string; text: string }> = {};
+
+        // Intercept incoming clipboard instructions from guacd on the WebSocket tunnel
+        const originalOnInstruction = tunnel.oninstruction;
+        tunnel.oninstruction = (opcode: string, args: string[]) => {
+          if (opcode === 'clipboard') {
+            const streamIndex = args[0];
+            const mimetype = args[1] || 'text/plain';
+            clipboardStreams[streamIndex] = { mimetype, text: '' };
+          } else if (opcode === 'blob') {
+            const streamIndex = args[0];
+            const base64Data = args[1];
+            if (clipboardStreams[streamIndex]) {
+              try {
+                // Decode base64 to UTF-8
+                const binaryStr = window.atob(base64Data);
+                const bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) {
+                  bytes[i] = binaryStr.charCodeAt(i);
+                }
+                const decoded = new TextDecoder('utf-8').decode(bytes);
+                clipboardStreams[streamIndex].text += decoded;
+              } catch {
+                clipboardStreams[streamIndex].text += window.atob(base64Data);
+              }
+            }
+          } else if (opcode === 'end') {
+            const streamIndex = args[0];
+            if (clipboardStreams[streamIndex]) {
+              const text = clipboardStreams[streamIndex].text;
+              delete clipboardStreams[streamIndex];
+              if (text) {
+                lastSyncedClipboardRef.current = text;
+                pendingRemoteClipboardRef.current = text;
+                setClipboardText(text);
+
+                // Attempt immediate copy to host clipboard
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(text).then(() => {
+                    pendingRemoteClipboardRef.current = '';
+                  }).catch(() => {
+                    // Stored in pendingRemoteClipboardRef, flushed on next user key/click
+                  });
+                }
+              }
+            }
+          }
+
+          // Forward to Guacamole.Client's native instruction handler
+          if (originalOnInstruction) {
+            originalOnInstruction(opcode, args);
+          }
+        };
+
         // Display element
         const display = client.getDisplay();
         const displayElement = display.getElement();
