@@ -13,6 +13,7 @@ export const SessionViewer: React.FC = () => {
   const clientRef = useRef<Guacamole.Client | null>(null);
   const tunnelRef = useRef<Guacamole.WebSocketTunnel | null>(null);
   const lastSyncedClipboardRef = useRef<string>('');
+  const pendingRemoteClipboardRef = useRef<string>('');
 
   const [deviceName, setDeviceName] = useState<string>('Remote Session');
   const [protocol, setProtocol] = useState<string>('rdp');
@@ -83,6 +84,16 @@ export const SessionViewer: React.FC = () => {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
+  // Helper: Flush pending remote clipboard to local host OS using current user interaction context
+  const flushRemoteClipboard = () => {
+    if (pendingRemoteClipboardRef.current && navigator.clipboard && navigator.clipboard.writeText) {
+      const text = pendingRemoteClipboardRef.current;
+      navigator.clipboard.writeText(text).then(() => {
+        pendingRemoteClipboardRef.current = '';
+      }).catch(() => {});
+    }
+  };
+
   useEffect(() => {
     let tunnel: Guacamole.WebSocketTunnel | null = null;
     let client: Guacamole.Client | null = null;
@@ -116,6 +127,15 @@ export const SessionViewer: React.FC = () => {
       }
     };
 
+    // Native copy capture from browser
+    const handleNativeCopy = (e: ClipboardEvent) => {
+      if (lastSyncedClipboardRef.current) {
+        e.clipboardData?.setData('text/plain', lastSyncedClipboardRef.current);
+        e.preventDefault();
+        pendingRemoteClipboardRef.current = '';
+      }
+    };
+
     // Synchronous Ctrl+V clipboard grab before key event executes on remote
     const handleGlobalKeyDown = async (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
@@ -132,6 +152,10 @@ export const SessionViewer: React.FC = () => {
           }
         } catch {}
       }
+    };
+
+    const handleUserInteraction = () => {
+      flushRemoteClipboard();
     };
 
     const startSession = async () => {
@@ -226,7 +250,7 @@ export const SessionViewer: React.FC = () => {
             case 3: // CONNECTED
               setConnectionStatus('connected');
               setTimeout(() => {
-                applyScale(scaleMode);
+                updateDisplaySizeAndScale();
               }, 100);
               break;
             case 4: // DISCONNECTING
@@ -246,9 +270,11 @@ export const SessionViewer: React.FC = () => {
         mouse = new Guacamole.Mouse(displayElement);
         mouse.onmousedown = (mouseState: any) => {
           if (client) client.sendMouseState(mouseState);
+          handleUserInteraction();
         };
         mouse.onmouseup = (mouseState: any) => {
           if (client) client.sendMouseState(mouseState);
+          handleUserInteraction();
         };
         mouse.onmousemove = (mouseState: any) => {
           if (client) client.sendMouseState(mouseState);
@@ -261,6 +287,7 @@ export const SessionViewer: React.FC = () => {
         };
         keyboard.onkeyup = (keysym: number) => {
           if (client) client.sendKeyEvent(0, keysym);
+          handleUserInteraction();
         };
 
         // 2-Way Clipboard Sync (Remote to Local)
@@ -274,19 +301,13 @@ export const SessionViewer: React.FC = () => {
             reader.onend = () => {
               if (incomingText) {
                 lastSyncedClipboardRef.current = incomingText;
+                pendingRemoteClipboardRef.current = incomingText;
                 setClipboardText(incomingText);
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                  navigator.clipboard.writeText(incomingText).catch(() => {
-                    // Fallback copy method
-                    const el = document.createElement('textarea');
-                    el.value = incomingText;
-                    el.style.position = 'fixed';
-                    el.style.left = '-9999px';
-                    document.body.appendChild(el);
-                    el.focus();
-                    el.select();
-                    try { document.execCommand('copy'); } catch {}
-                    document.body.removeChild(el);
+                  navigator.clipboard.writeText(incomingText).then(() => {
+                    pendingRemoteClipboardRef.current = '';
+                  }).catch(() => {
+                    // Stored in pendingRemoteClipboardRef, flushed on next user key/click
                   });
                 }
               }
@@ -295,7 +316,11 @@ export const SessionViewer: React.FC = () => {
         };
 
         window.addEventListener('paste', handlePasteEvent, true);
+        window.addEventListener('copy', handleNativeCopy, true);
         window.addEventListener('keydown', handleGlobalKeyDown, true);
+        window.addEventListener('keyup', handleUserInteraction, true);
+        window.addEventListener('pointerup', handleUserInteraction, true);
+        window.addEventListener('pointerdown', handleUserInteraction, true);
         window.addEventListener('focus', syncLocalToRemote);
         if (containerRef.current) {
           containerRef.current.addEventListener('pointerdown', syncLocalToRemote);
@@ -315,7 +340,11 @@ export const SessionViewer: React.FC = () => {
 
     return () => {
       window.removeEventListener('paste', handlePasteEvent, true);
+      window.removeEventListener('copy', handleNativeCopy, true);
       window.removeEventListener('keydown', handleGlobalKeyDown, true);
+      window.removeEventListener('keyup', handleUserInteraction, true);
+      window.removeEventListener('pointerup', handleUserInteraction, true);
+      window.removeEventListener('pointerdown', handleUserInteraction, true);
       window.removeEventListener('focus', syncLocalToRemote);
       if (keyboard) {
         keyboard.onkeydown = null;
@@ -336,24 +365,40 @@ export const SessionViewer: React.FC = () => {
     const display = clientRef.current.getDisplay();
     if (!display) return;
 
-    if (mode === 'fit') {
-      const dispWidth = display.getWidth();
-      const dispHeight = display.getHeight();
-      if (dispWidth > 0 && dispHeight > 0) {
-        const availableWidth = window.innerWidth || document.documentElement.clientWidth;
-        const availableHeight = window.innerHeight || document.documentElement.clientHeight;
-        const scale = Math.min(availableWidth / dispWidth, availableHeight / dispHeight);
-        display.scale(scale);
+    const isFull = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+    const availWidth = isFull ? (screen.width || window.innerWidth) : (window.innerWidth || document.documentElement.clientWidth);
+    const availHeight = isFull ? (screen.height || window.innerHeight) : (window.innerHeight || document.documentElement.clientHeight);
+    const dispWidth = display.getWidth();
+    const dispHeight = display.getHeight();
 
-        const el = display.getElement();
-        if (el) {
-          el.style.display = 'block';
-          el.style.margin = 'auto';
-        }
-      }
+    if (dispWidth <= 0 || dispHeight <= 0) return;
+
+    if (mode === 'fit') {
+      const scale = Math.min(availWidth / dispWidth, availHeight / dispHeight);
+      display.scale(scale);
     } else {
       display.scale(1.0);
     }
+
+    const el = display.getElement();
+    if (el) {
+      el.style.display = 'block';
+      el.style.margin = 'auto';
+    }
+  };
+
+  const updateDisplaySizeAndScale = () => {
+    if (!clientRef.current) return;
+    const isFull = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+    const availWidth = isFull ? (screen.width || window.innerWidth) : window.innerWidth;
+    const availHeight = isFull ? (screen.height || window.innerHeight) : window.innerHeight;
+
+    // Send dynamic resolution update to guacd / Windows RDP
+    try {
+      clientRef.current.sendSize(availWidth, availHeight);
+    } catch {}
+
+    applyScale(scaleMode);
   };
 
   const handleToggleScaleMode = () => {
@@ -365,17 +410,17 @@ export const SessionViewer: React.FC = () => {
   // Window resize & Fullscreen change listeners
   useEffect(() => {
     const handleResize = () => {
-      if (scaleMode === 'fit' && clientRef.current) {
-        applyScale('fit');
+      if (clientRef.current) {
+        updateDisplaySizeAndScale();
       }
     };
 
     const handleFullscreenChange = () => {
       const isFull = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
       setIsFullscreen(isFull);
-      setTimeout(() => applyScale(scaleMode), 50);
-      setTimeout(() => applyScale(scaleMode), 150);
-      setTimeout(() => applyScale(scaleMode), 350);
+      updateDisplaySizeAndScale();
+      setTimeout(() => updateDisplaySizeAndScale(), 150);
+      setTimeout(() => updateDisplaySizeAndScale(), 400);
     };
 
     window.addEventListener('resize', handleResize);

@@ -6,6 +6,7 @@ declare module 'guacamole-common-js' {
       disconnect(): void;
       getDisplay(): any;
       sendKeyEvent(pressed: number, keysym: number): void;
+      sendSize(width: number, height: number): void;
       createClipboardStream(mimetype: string): any;
       onclipboard?: (stream: any, mimetype: string) => void;
       [key: string]: any;
