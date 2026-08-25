@@ -19,8 +19,19 @@ export const SessionViewer: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('connecting');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
-  // Toolbar state
+  // Toolbar auto-hide state & timer
   const [toolbarOpen, setToolbarOpen] = useState(true);
+  const hideTimerRef = useRef<any>(null);
+
+  const resetHideTimer = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+    }
+    hideTimerRef.current = setTimeout(() => {
+      setToolbarOpen(false);
+    }, 3000);
+  };
+
   const [scaleMode, setScaleMode] = useState<'fit' | 'native'>('fit');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sessionSeconds, setSessionSeconds] = useState(0);
@@ -28,6 +39,26 @@ export const SessionViewer: React.FC = () => {
   // Clipboard sync modal
   const [isClipboardModalOpen, setIsClipboardModalOpen] = useState(false);
   const [clipboardText, setClipboardText] = useState('');
+
+  // Auto-hide toolbar timer on mount / connection
+  useEffect(() => {
+    resetHideTimer();
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, [connectionStatus]);
+
+  // Reveal toolbar when mouse moves near top of screen
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (e.clientY < 50) {
+        setToolbarOpen(true);
+        resetHideTimer();
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
 
   // Session duration timer
   useEffect(() => {
@@ -85,6 +116,24 @@ export const SessionViewer: React.FC = () => {
       }
     };
 
+    // Synchronous Ctrl+V clipboard grab before key event executes on remote
+    const handleGlobalKeyDown = async (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+        try {
+          if (navigator.clipboard && navigator.clipboard.readText && clientRef.current) {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+              lastSyncedClipboardRef.current = text;
+              const stream = clientRef.current.createClipboardStream('text/plain');
+              const writer = new Guacamole.StringWriter(stream);
+              writer.sendText(text);
+              writer.sendEnd();
+            }
+          }
+        } catch {}
+      }
+    };
+
     const startSession = async () => {
       setConnectionStatus('connecting');
       setErrorMessage(null);
@@ -108,8 +157,8 @@ export const SessionViewer: React.FC = () => {
           throw new Error('No valid session token provided');
         }
 
-        const width = window.innerWidth;
-        const height = window.innerHeight;
+        const width = window.innerWidth || screen.width || 1280;
+        const height = window.innerHeight || screen.height || 720;
         const dpi = window.devicePixelRatio ? Math.round(window.devicePixelRatio * 96) : 96;
 
         // Build WebSocket tunnel URL
@@ -132,6 +181,7 @@ export const SessionViewer: React.FC = () => {
           containerRef.current.innerHTML = '';
           displayElement.classList.add('guacamole-display');
           displayElement.style.zIndex = '1';
+          displayElement.style.margin = 'auto';
           containerRef.current.appendChild(displayElement);
 
           // Force z-index on canvas layers (overrides guacamole-common-js inline z-index: -1)
@@ -158,6 +208,13 @@ export const SessionViewer: React.FC = () => {
           });
         }
 
+        // Auto-scale on remote display resize
+        display.onresize = () => {
+          setTimeout(() => {
+            applyScale(scaleMode);
+          }, 50);
+        };
+
         // Connection state handling
         client.onstatechange = (state: number) => {
           switch (state) {
@@ -168,6 +225,9 @@ export const SessionViewer: React.FC = () => {
               break;
             case 3: // CONNECTED
               setConnectionStatus('connected');
+              setTimeout(() => {
+                applyScale(scaleMode);
+              }, 100);
               break;
             case 4: // DISCONNECTING
             case 5: // DISCONNECTED
@@ -216,14 +276,26 @@ export const SessionViewer: React.FC = () => {
                 lastSyncedClipboardRef.current = incomingText;
                 setClipboardText(incomingText);
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                  navigator.clipboard.writeText(incomingText).catch(() => {});
+                  navigator.clipboard.writeText(incomingText).catch(() => {
+                    // Fallback copy method
+                    const el = document.createElement('textarea');
+                    el.value = incomingText;
+                    el.style.position = 'fixed';
+                    el.style.left = '-9999px';
+                    document.body.appendChild(el);
+                    el.focus();
+                    el.select();
+                    try { document.execCommand('copy'); } catch {}
+                    document.body.removeChild(el);
+                  });
                 }
               }
             };
           }
         };
 
-        window.addEventListener('paste', handlePasteEvent);
+        window.addEventListener('paste', handlePasteEvent, true);
+        window.addEventListener('keydown', handleGlobalKeyDown, true);
         window.addEventListener('focus', syncLocalToRemote);
         if (containerRef.current) {
           containerRef.current.addEventListener('pointerdown', syncLocalToRemote);
@@ -242,7 +314,8 @@ export const SessionViewer: React.FC = () => {
     startSession();
 
     return () => {
-      window.removeEventListener('paste', handlePasteEvent);
+      window.removeEventListener('paste', handlePasteEvent, true);
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
       window.removeEventListener('focus', syncLocalToRemote);
       if (keyboard) {
         keyboard.onkeydown = null;
@@ -267,8 +340,16 @@ export const SessionViewer: React.FC = () => {
       const dispWidth = display.getWidth();
       const dispHeight = display.getHeight();
       if (dispWidth > 0 && dispHeight > 0) {
-        const scale = Math.min(window.innerWidth / dispWidth, window.innerHeight / dispHeight);
+        const availableWidth = window.innerWidth || document.documentElement.clientWidth;
+        const availableHeight = window.innerHeight || document.documentElement.clientHeight;
+        const scale = Math.min(availableWidth / dispWidth, availableHeight / dispHeight);
         display.scale(scale);
+
+        const el = display.getElement();
+        if (el) {
+          el.style.display = 'block';
+          el.style.margin = 'auto';
+        }
       }
     } else {
       display.scale(1.0);
@@ -281,14 +362,31 @@ export const SessionViewer: React.FC = () => {
     applyScale(nextMode);
   };
 
+  // Window resize & Fullscreen change listeners
   useEffect(() => {
     const handleResize = () => {
       if (scaleMode === 'fit' && clientRef.current) {
         applyScale('fit');
       }
     };
+
+    const handleFullscreenChange = () => {
+      const isFull = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      setIsFullscreen(isFull);
+      setTimeout(() => applyScale(scaleMode), 50);
+      setTimeout(() => applyScale(scaleMode), 150);
+      setTimeout(() => applyScale(scaleMode), 350);
+    };
+
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
   }, [scaleMode]);
 
   // Send Ctrl+Alt+Del
@@ -342,8 +440,12 @@ export const SessionViewer: React.FC = () => {
       
       {/* 1. Floating Glass Toolbar (Collapsible at top) */}
       <div
+        onMouseEnter={() => {
+          if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+        }}
+        onMouseLeave={() => resetHideTimer()}
         className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ${
-          toolbarOpen ? 'translate-y-0 opacity-100' : '-translate-y-16 opacity-0 pointer-events-none'
+          toolbarOpen ? 'translate-y-0 opacity-100' : '-translate-y-20 opacity-0 pointer-events-none'
         }`}
       >
         <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-surface/90 backdrop-blur-xl border border-surface-borderLight shadow-2xl text-xs text-slate-200">
@@ -416,7 +518,11 @@ export const SessionViewer: React.FC = () => {
 
       {/* Toolbar Toggle Notch */}
       <button
-        onClick={() => setToolbarOpen(!toolbarOpen)}
+        onClick={() => {
+          const next = !toolbarOpen;
+          setToolbarOpen(next);
+          if (next) resetHideTimer();
+        }}
         className="fixed top-0 left-1/2 -translate-x-1/2 z-40 px-3 py-0.5 rounded-b-xl bg-surface-card border border-surface-border text-slate-400 hover:text-white text-[10px] transition-all shadow-md"
       >
         <SymbolIcon name={toolbarOpen ? 'chevron.up' : 'chevron.down'} className="w-3 h-3" />
