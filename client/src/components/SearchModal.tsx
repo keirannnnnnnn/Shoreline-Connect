@@ -21,10 +21,6 @@ export const SearchModal: React.FC<SearchModalProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        // Toggle search
-      }
       if (e.key === 'Escape' && isOpen) {
         onClose();
       }
@@ -32,6 +28,8 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
 
   const folderMap = new Map(folders.map((f) => [f.id, f]));
   const lowerQuery = query.toLowerCase().trim();

@@ -12,6 +12,7 @@ export const SessionViewer: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const tunnelRef = useRef<Guacamole.WebSocketTunnel | null>(null);
+  const lastSyncedClipboardRef = useRef<string>('');
 
   const [deviceName, setDeviceName] = useState<string>('Remote Session');
   const [protocol, setProtocol] = useState<string>('rdp');
@@ -56,6 +57,33 @@ export const SessionViewer: React.FC = () => {
     let client: Guacamole.Client | null = null;
     let mouse: Guacamole.Mouse | null = null;
     let keyboard: Guacamole.Keyboard | null = null;
+
+    // 2-Way Clipboard Sync (Local to Remote)
+    const syncLocalToRemote = async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText && clientRef.current) {
+          const text = await navigator.clipboard.readText();
+          if (text && text !== lastSyncedClipboardRef.current) {
+            lastSyncedClipboardRef.current = text;
+            const stream = clientRef.current.createClipboardStream('text/plain');
+            const writer = new Guacamole.StringWriter(stream);
+            writer.sendText(text);
+            writer.sendEnd();
+          }
+        }
+      } catch {}
+    };
+
+    const handlePasteEvent = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData('text/plain');
+      if (text && clientRef.current) {
+        lastSyncedClipboardRef.current = text;
+        const stream = clientRef.current.createClipboardStream('text/plain');
+        const writer = new Guacamole.StringWriter(stream);
+        writer.sendText(text);
+        writer.sendEnd();
+      }
+    };
 
     const startSession = async () => {
       setConnectionStatus('connecting');
@@ -175,6 +203,32 @@ export const SessionViewer: React.FC = () => {
           if (client) client.sendKeyEvent(0, keysym);
         };
 
+        // 2-Way Clipboard Sync (Remote to Local)
+        client.onclipboard = (stream: any, mimetype: string) => {
+          if (mimetype.startsWith('text/')) {
+            const reader = new Guacamole.StringReader(stream);
+            let incomingText = '';
+            reader.ontext = (chunk: string) => {
+              incomingText += chunk;
+            };
+            reader.onend = () => {
+              if (incomingText) {
+                lastSyncedClipboardRef.current = incomingText;
+                setClipboardText(incomingText);
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(incomingText).catch(() => {});
+                }
+              }
+            };
+          }
+        };
+
+        window.addEventListener('paste', handlePasteEvent);
+        window.addEventListener('focus', syncLocalToRemote);
+        if (containerRef.current) {
+          containerRef.current.addEventListener('pointerdown', syncLocalToRemote);
+        }
+
         // Connect to guacd
         client.connect('');
 
@@ -188,6 +242,8 @@ export const SessionViewer: React.FC = () => {
     startSession();
 
     return () => {
+      window.removeEventListener('paste', handlePasteEvent);
+      window.removeEventListener('focus', syncLocalToRemote);
       if (keyboard) {
         keyboard.onkeydown = null;
         keyboard.onkeyup = null;

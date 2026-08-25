@@ -7,6 +7,7 @@ declare module 'guacamole-common-js' {
       getDisplay(): any;
       sendKeyEvent(pressed: number, keysym: number): void;
       createClipboardStream(mimetype: string): any;
+      onclipboard?: (stream: any, mimetype: string) => void;
       [key: string]: any;
     }
     class WebSocketTunnel {
@@ -25,6 +26,12 @@ declare module 'guacamole-common-js' {
       constructor(stream: any);
       sendText(text: string): void;
       sendEnd(): void;
+      [key: string]: any;
+    }
+    class StringReader {
+      constructor(stream: any);
+      ontext?: (text: string) => void;
+      onend?: () => void;
       [key: string]: any;
     }
   }
