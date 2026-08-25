@@ -41,6 +41,10 @@ export const SessionViewer: React.FC = () => {
   const [isClipboardModalOpen, setIsClipboardModalOpen] = useState(false);
   const [clipboardText, setClipboardText] = useState('');
 
+  // Remote clipboard toast notification
+  const [remoteClipboardToast, setRemoteClipboardToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<any>(null);
+
   // Auto-hide toolbar timer on mount / connection
   useEffect(() => {
     resetHideTimer();
@@ -84,14 +88,41 @@ export const SessionViewer: React.FC = () => {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  // Helper: Flush pending remote clipboard to local host OS using current user interaction context
-  const flushRemoteClipboard = () => {
-    if (pendingRemoteClipboardRef.current && navigator.clipboard && navigator.clipboard.writeText) {
-      const text = pendingRemoteClipboardRef.current;
+  // Write text to the local OS clipboard using the most reliable available method.
+  // Uses hidden textarea + execCommand as the primary path (works in most browsers without
+  // an explicit user gesture requirement when called synchronously), then falls back to
+  // the async Clipboard API and shows a toast the user can click to copy manually.
+  const writeToLocalClipboard = (text: string) => {
+    lastSyncedClipboardRef.current = text;
+    pendingRemoteClipboardRef.current = text;
+    setClipboardText(text);
+
+    // Method 1: hidden textarea + execCommand (synchronous, no gesture needed in most browsers)
+    let copiedOk = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+      ta.setAttribute('readonly', '');
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      copiedOk = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch {}
+
+    // Method 2: async Clipboard API (may silently fail without user gesture)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(() => {
+        copiedOk = true;
         pendingRemoteClipboardRef.current = '';
       }).catch(() => {});
     }
+
+    // Always show a toast so the user can click to copy even if both methods failed
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setRemoteClipboardToast(text);
+    toastTimerRef.current = setTimeout(() => setRemoteClipboardToast(null), copiedOk ? 3000 : 10000);
   };
 
   useEffect(() => {
@@ -155,7 +186,14 @@ export const SessionViewer: React.FC = () => {
     };
 
     const handleUserInteraction = () => {
-      flushRemoteClipboard();
+      // Flush any pending remote clipboard text captured via the interaction event
+      if (pendingRemoteClipboardRef.current) {
+        const text = pendingRemoteClipboardRef.current;
+        pendingRemoteClipboardRef.current = '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+      }
     };
 
     const startSession = async () => {
@@ -195,59 +233,50 @@ export const SessionViewer: React.FC = () => {
         tunnelRef.current = tunnel;
         clientRef.current = client;
 
-        // Clipboard stream accumulator
+        // Clipboard stream accumulator (decode guacd clipboard blob instructions directly)
         const clipboardStreams: Record<string, { mimetype: string; text: string }> = {};
 
-        // Intercept incoming clipboard instructions from guacd on the WebSocket tunnel
-        const originalOnInstruction = tunnel.oninstruction;
-        tunnel.oninstruction = (opcode: string, args: string[]) => {
-          if (opcode === 'clipboard') {
-            const streamIndex = args[0];
-            const mimetype = args[1] || 'text/plain';
-            clipboardStreams[streamIndex] = { mimetype, text: '' };
-          } else if (opcode === 'blob') {
-            const streamIndex = args[0];
-            const base64Data = args[1];
-            if (clipboardStreams[streamIndex]) {
-              try {
-                // Decode base64 to UTF-8
-                const binaryStr = window.atob(base64Data);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                  bytes[i] = binaryStr.charCodeAt(i);
+        // Intercept incoming clipboard instructions from guacd on the WebSocket tunnel.
+        // This fires BEFORE Guacamole.Client overwrites tunnel.oninstruction, so we wrap it
+        // after Guacamole.Client is constructed below, once the client has set its handler.
+        const installClipboardInterceptor = () => {
+          if (!tunnel) return;
+          const t = tunnel;
+          const clientHandler = t.oninstruction;
+          t.oninstruction = (opcode: string, args: string[]) => {
+            if (opcode === 'clipboard') {
+              const streamIndex = args[0];
+              const mimetype = args[1] || 'text/plain';
+              clipboardStreams[streamIndex] = { mimetype, text: '' };
+            } else if (opcode === 'blob') {
+              const streamIndex = args[0];
+              const base64Data = args[1];
+              if (clipboardStreams[streamIndex]) {
+                try {
+                  const binaryStr = window.atob(base64Data);
+                  const bytes = new Uint8Array(binaryStr.length);
+                  for (let i = 0; i < binaryStr.length; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                  }
+                  clipboardStreams[streamIndex].text += new TextDecoder('utf-8').decode(bytes);
+                } catch {
+                  clipboardStreams[streamIndex].text += window.atob(base64Data);
                 }
-                const decoded = new TextDecoder('utf-8').decode(bytes);
-                clipboardStreams[streamIndex].text += decoded;
-              } catch {
-                clipboardStreams[streamIndex].text += window.atob(base64Data);
               }
-            }
-          } else if (opcode === 'end') {
-            const streamIndex = args[0];
-            if (clipboardStreams[streamIndex]) {
-              const text = clipboardStreams[streamIndex].text;
-              delete clipboardStreams[streamIndex];
-              if (text) {
-                lastSyncedClipboardRef.current = text;
-                pendingRemoteClipboardRef.current = text;
-                setClipboardText(text);
-
-                // Attempt immediate copy to host clipboard
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                  navigator.clipboard.writeText(text).then(() => {
-                    pendingRemoteClipboardRef.current = '';
-                  }).catch(() => {
-                    // Stored in pendingRemoteClipboardRef, flushed on next user key/click
-                  });
+            } else if (opcode === 'end') {
+              const streamIndex = args[0];
+              if (clipboardStreams[streamIndex]) {
+                const text = clipboardStreams[streamIndex].text;
+                delete clipboardStreams[streamIndex];
+                if (text) {
+                  writeToLocalClipboard(text);
                 }
               }
             }
-          }
 
-          // Forward to Guacamole.Client's native instruction handler
-          if (originalOnInstruction) {
-            originalOnInstruction(opcode, args);
-          }
+            // Always forward to Guacamole.Client's handler
+            if (clientHandler) clientHandler(opcode, args);
+          };
         };
 
         // Display element
@@ -345,7 +374,7 @@ export const SessionViewer: React.FC = () => {
           handleUserInteraction();
         };
 
-        // 2-Way Clipboard Sync (Remote to Local)
+        // 2-Way Clipboard Sync (Remote to Local) via Guacamole.Client stream API
         client.onclipboard = (stream: any, mimetype: string) => {
           if (mimetype.startsWith('text/')) {
             const reader = new Guacamole.StringReader(stream);
@@ -355,16 +384,7 @@ export const SessionViewer: React.FC = () => {
             };
             reader.onend = () => {
               if (incomingText) {
-                lastSyncedClipboardRef.current = incomingText;
-                pendingRemoteClipboardRef.current = incomingText;
-                setClipboardText(incomingText);
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                  navigator.clipboard.writeText(incomingText).then(() => {
-                    pendingRemoteClipboardRef.current = '';
-                  }).catch(() => {
-                    // Stored in pendingRemoteClipboardRef, flushed on next user key/click
-                  });
-                }
+                writeToLocalClipboard(incomingText);
               }
             };
           }
@@ -381,8 +401,10 @@ export const SessionViewer: React.FC = () => {
           containerRef.current.addEventListener('pointerdown', syncLocalToRemote);
         }
 
-        // Connect to guacd
+        // Connect to guacd — this triggers Guacamole.Client to set its tunnel.oninstruction.
+        // Install our clipboard interceptor AFTER so we wrap the client's handler, not the other way round.
         client.connect('');
+        installClipboardInterceptor();
 
       } catch (err: any) {
         console.error('[Session Error]', err);
@@ -710,6 +732,33 @@ export const SessionViewer: React.FC = () => {
                 Send to Session
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Remote Clipboard Toast */}
+      {remoteClipboardToast !== null && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-2 max-w-sm w-full px-4">
+          <div className="flex items-start gap-3 px-4 py-3 rounded-2xl bg-surface-card border border-emerald-500/30 shadow-2xl text-xs text-white">
+            <SymbolIcon name="doc.on.clipboard.fill" className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-emerald-300 mb-0.5">Remote clipboard captured</p>
+              <p className="text-slate-400 font-mono truncate">{remoteClipboardToast}</p>
+            </div>
+            <button
+              onClick={() => {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(remoteClipboardToast).catch(() => {});
+                }
+                setRemoteClipboardToast(null);
+              }}
+              className="flex-shrink-0 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-semibold transition-colors"
+            >
+              Copy
+            </button>
+            <button onClick={() => setRemoteClipboardToast(null)} className="flex-shrink-0 text-slate-500 hover:text-white">
+              <SymbolIcon name="xmark" className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       )}
