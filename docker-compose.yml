@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # 1. guacd - Apache Guacamole Protocol Engine Daemon
+  guacd:
+    image: guacamole/guacd:latest
+    container_name: shoreline-guacd
+    restart: unless-stopped
+    ports:
+      - "4822:4822"
+    networks:
+      - shoreline-net
+
+  # 2. Shoreline Connect - Custom Next-Gen Web UI & Backend API
+  shoreline-connect:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shoreline-connect
+    restart: unless-stopped
+    ports:
+      - "3000:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - JWT_SECRET=change_me_to_a_secure_random_string_in_production
+      - ENCRYPTION_KEY=change_me_to_a_32_byte_aes_master_key_123!
+      - AD_URL=ldap://shoreline.icu:389
+      - AD_BASE_DN=DC=shoreline,DC=icu
+      - AD_DOMAIN=shoreline.icu
+      - AD_ADMIN_GROUP=Shoreline-Admins
+      - AD_USER_GROUP=Shoreline-Users
+      - DEV_AUTH_MODE=false
+      - GUACD_HOST=guacd
+      - GUACD_PORT=4822
+    volumes:
+      - ./data:/app/server/data
+      - ./Symbols:/app/Symbols:ro
+    depends_on:
+      - guacd
+    networks:
+      - shoreline-net
+
+networks:
+  shoreline-net:
+    driver: bridge

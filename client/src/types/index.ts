@@ -1,0 +1,127 @@
+export interface User {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string | null;
+  role: 'admin' | 'user';
+  ad_dn?: string | null;
+  last_login_at?: string | null;
+  created_at?: string;
+}
+
+export interface DeviceParameters {
+  width?: number;
+  height?: number;
+  dpi?: number;
+  colorDepth?: number;
+  audio?: boolean;
+  driveRedirect?: boolean;
+  domain?: string;
+  security?: 'any' | 'nla' | 'tls' | 'rdp';
+  ignoreCert?: boolean;
+  keyboardLayout?: string;
+  timezone?: string;
+  fontSize?: number;
+  cursorStyle?: string;
+  [key: string]: any;
+}
+
+export interface Device {
+  id: string;
+  name: string;
+  protocol: 'rdp' | 'vnc' | 'ssh';
+  host: string;
+  port: number;
+  parameters: string | DeviceParameters;
+  folder_id: string | null;
+  folder_name?: string | null;
+  is_favorite: number | boolean;
+  owner_id: string;
+  owner_username?: string;
+  owner_display_name?: string;
+  created_by_admin_id: string | null;
+  created_at: string;
+  updated_at: string;
+  is_shared?: boolean;
+  shared_by_user?: string;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  user_id: string;
+  icon: string;
+  color: string;
+  created_at: string;
+  device_count?: number;
+}
+
+export interface DeviceShare {
+  id: string;
+  device_id: string;
+  device_name?: string;
+  shared_with_user_id: string;
+  shared_with_username?: string;
+  shared_with_display_name?: string;
+  created_by_user_id: string;
+  created_at: string;
+}
+
+export interface GuestShare {
+  id: string;
+  token: string;
+  device_id: string;
+  device_name?: string;
+  protocol?: string;
+  created_by_user_id: string;
+  has_pin: boolean;
+  duration_label: string;
+  expires_at: string;
+  max_uses: number | null;
+  use_count: number;
+  revoked_at: string | null;
+  created_at: string;
+  is_expired?: boolean;
+}
+
+export interface SessionLog {
+  id: string;
+  session_id: string;
+  user_id: string | null;
+  user_display_name?: string | null;
+  user_username?: string | null;
+  guest_share_id: string | null;
+  device_id: string;
+  device_name: string;
+  protocol: string;
+  connection_method: 'owner' | 'shared_user' | 'guest_link';
+  client_ip: string | null;
+  user_agent: string | null;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds?: number | null;
+  status: 'active' | 'closed' | 'failed';
+  error_message: string | null;
+}
+
+export interface SystemSettings {
+  ad_domain: string;
+  ad_url: string;
+  ad_base_dn: string;
+  ad_admin_group: string;
+  ad_user_group: string;
+  git_repo_url: string;
+  git_branch: string;
+  [key: string]: string;
+}
+
+export interface UpdateStatus {
+  currentCommit: string;
+  commitDate: string;
+  commitMessage: string;
+  branch: string;
+  repoUrl: string;
+  hasUpdates: boolean;
+  latestRemoteCommit?: string;
+  error?: string;
+}
