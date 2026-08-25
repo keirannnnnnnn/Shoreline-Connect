@@ -65,7 +65,7 @@ export const Login: React.FC = () => {
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Domain Username
+              Username
             </label>
             <div className="relative">
               <input
@@ -74,7 +74,7 @@ export const Login: React.FC = () => {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. keiran.griffiths or username@shoreline.icu"
+                placeholder="Username"
                 className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-sm focus:ring-1 focus:ring-brand-500 focus:outline-none placeholder-slate-500"
               />
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -111,7 +111,7 @@ export const Login: React.FC = () => {
               {loading ? (
                 <>
                   <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-4 h-4 animate-spin" />
-                  <span>Authenticating against Shoreline.icu...</span>
+                  <span>Signing in...</span>
                 </>
               ) : (
                 <>
@@ -122,14 +122,6 @@ export const Login: React.FC = () => {
             </button>
           </div>
         </form>
-
-        {/* Footer domain notice */}
-        <div className="mt-8 pt-4 border-t border-surface-border/60 text-center">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface text-[11px] font-mono text-slate-400 border border-surface-border">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Active Directory: <strong className="text-slate-200">Shoreline.icu</strong>
-          </span>
-        </div>
 
       </div>
     </div>
