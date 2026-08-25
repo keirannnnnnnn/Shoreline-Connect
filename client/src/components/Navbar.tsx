@@ -33,9 +33,6 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
               <span className="font-bold text-lg tracking-tight text-white flex items-center gap-1.5">
                 Shoreline <span className="text-brand-400 font-semibold">Connect</span>
               </span>
-              <span className="text-[10px] text-slate-400 font-medium tracking-wider uppercase">
-                Remote Desktop & Terminal
-              </span>
             </div>
           </Link>
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.js';
 import { Device, Folder } from '../types/index.js';
 import { api } from '../lib/api.js';
@@ -13,6 +14,7 @@ import { SymbolIcon } from '../components/SymbolIcon.js';
 
 export const Dashboard: React.FC = () => {
   const { user, isAdmin } = useAuth();
+  const navigate = useNavigate();
 
   const [devices, setDevices] = useState<Device[]>([]);
   const [recents, setRecents] = useState<any[]>([]);
@@ -85,6 +87,24 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const getIconForProto = (proto: string) => {
+    switch (proto.toLowerCase()) {
+      case 'rdp': return 'display';
+      case 'ssh': return 'terminal';
+      case 'vnc': return 'display.2';
+      default: return 'network';
+    }
+  };
+
+  const getColorForProto = (proto: string) => {
+    switch (proto.toLowerCase()) {
+      case 'rdp': return 'text-blue-400 bg-blue-500/10 border-blue-500/20';
+      case 'ssh': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+      case 'vnc': return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+      default: return 'text-slate-400 bg-slate-500/10 border-slate-500/20';
+    }
+  };
+
   // Filtered devices based on active tab and search query
   const filteredDevices = devices.filter((d) => {
     const matchesSearch =
@@ -131,9 +151,6 @@ export const Dashboard: React.FC = () => {
             <h1 className="text-2xl font-bold text-white tracking-tight">
               Welcome back, {user?.display_name || user?.username}
             </h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Secure remote session broker powered by <strong className="text-slate-300">guacd</strong> protocol engine.
-            </p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -159,7 +176,7 @@ export const Dashboard: React.FC = () => {
         {/* 1. Recent Connections */}
         <RecentConnections recents={recents} />
 
-        {/* 2. Favourites Section (if any) */}
+        {/* 2. Favourites Section (Compact Tiles) */}
         {favorites.length > 0 && selectedTab === 'all' && (
           <div className="mb-8">
             <div className="flex items-center gap-2 mb-3.5">
@@ -169,16 +186,49 @@ export const Dashboard: React.FC = () => {
               </h2>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
               {favorites.map((dev) => (
-                <DeviceCard
+                <div
                   key={`fav-${dev.id}`}
-                  device={dev}
-                  onToggleFavorite={handleToggleFavorite}
-                  onShare={handleShare}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                />
+                  onClick={() => navigate(`/session/${dev.id}`)}
+                  className="group rounded-xl bg-surface-card/90 hover:bg-surface-hover border border-surface-border hover:border-surface-borderLight p-3.5 transition-all duration-150 cursor-pointer shadow-sm flex items-center justify-between gap-3"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center border flex-shrink-0 ${getColorForProto(dev.protocol)}`}>
+                      <SymbolIcon name={getIconForProto(dev.protocol)} className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm text-slate-200 group-hover:text-white truncate">
+                        {dev.name}
+                      </p>
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                        <span className="uppercase font-mono font-medium text-[10px] text-slate-500">{dev.protocol}</span>
+                        {dev.folder_name && (
+                          <>
+                            <span>•</span>
+                            <span className="truncate">{dev.folder_name}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleFavorite(dev.id);
+                      }}
+                      className="p-1 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-surface-active transition-colors"
+                      title="Remove from favorites"
+                    >
+                      <SymbolIcon name="star.fill" className="w-3.5 h-3.5" />
+                    </button>
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg bg-surface-active text-slate-300">
+                      <SymbolIcon name="arrow.up.right" className="w-3.5 h-3.5" />
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>

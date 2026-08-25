@@ -200,9 +200,20 @@ export class GuacdService {
       if (clientParams.audio && clientParams.audio.length > 0) {
         const audioInst = this.formatInstruction(['audio', ...clientParams.audio]);
         guacdSocket.write(audioInst);
+      } else {
+        const audioInst = this.formatInstruction(['audio', 'audio/ogg', 'audio/mp4', 'audio/webm', 'audio/wav']);
+        guacdSocket.write(audioInst);
       }
 
-      // 3. Build response values for expected args
+      // 3. Send video formats (empty/supported)
+      const videoInst = this.formatInstruction(['video']);
+      guacdSocket.write(videoInst);
+
+      // 4. Send image formats (Crucial for guacd display rendering!)
+      const imageInst = this.formatInstruction(['image', 'image/png', 'image/jpeg', 'image/webp']);
+      guacdSocket.write(imageInst);
+
+      // 5. Build response values for expected args
       const argValues = this.buildConnectionArgs(expectedArgs, deviceConfig, width, height, dpi);
       const connectInst = this.formatInstruction(['connect', ...argValues]);
       guacdSocket.write(connectInst);
@@ -244,20 +255,54 @@ export class GuacdService {
       'domain': params.domain || '',
       'security': params.security || 'any',
       'ignore-cert': params.ignoreCert !== false ? 'true' : 'false',
+      'disable-auth': 'false',
       'width': String(width),
       'height': String(height),
       'dpi': String(dpi),
       'color-depth': String(params.colorDepth || 24),
-      'enable-audio': params.audio ? 'true' : 'false',
+      
+      // Audio settings
+      'enable-audio': params.audio !== false ? 'true' : 'false',
+      'disable-audio': params.audio === false ? 'true' : 'false',
+      'enable-audio-input': 'false',
+
+      // Storage & Drive redirection
       'enable-drive': params.driveRedirect ? 'true' : 'false',
+      'create-drive-path': 'false',
+
+      // Keyboard & Localization
       'server-layout': params.keyboardLayout || 'en-us-qwerty',
       'timezone': params.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      
+      // Performance & Rendering settings (Fixes Windows 10/11 / Server EGFX arbitration teardown)
+      'disable-gfx': params['disable-gfx'] !== undefined ? String(params['disable-gfx']) : 'true',
+      'disable-glyph-caching': params['disable-glyph-caching'] !== undefined ? String(params['disable-glyph-caching']) : 'true',
+      'disable-bitmap-caching': params['disable-bitmap-caching'] !== undefined ? String(params['disable-bitmap-caching']) : 'false',
+      'disable-offscreen-caching': params['disable-offscreen-caching'] !== undefined ? String(params['disable-offscreen-caching']) : 'false',
+      'enable-font-smoothing': params.fontSmoothing !== false ? 'true' : 'false',
+      'enable-theming': params.theming !== false ? 'true' : 'false',
+      'enable-wallpaper': params.wallpaper ? 'true' : 'false',
+      'enable-full-window-drag': params.fullWindowDrag ? 'true' : 'false',
+      'enable-desktop-composition': params.desktopComposition ? 'true' : 'false',
+      'enable-menu-animations': params.menuAnimations ? 'true' : 'false',
+      'enable-printing': 'false',
+      'resize-method': params['resize-method'] || 'display-update',
+      'client-name': params.clientName || 'ShorelineConnect',
+      'console': params.console ? 'true' : 'false',
+
+      // Terminal (SSH)
       'font-size': String(params.fontSize || 14),
       'cursor': params.cursorStyle || 'ibeam',
       'scrollback': '2000',
     };
 
-    return expectedArgs.map(argName => valueMap[argName] ?? (params[argName] !== undefined ? String(params[argName]) : ''));
+    return expectedArgs.map(argName => {
+      // If guacd sends a protocol version token (e.g. "VERSION_1_5_0"), echo it back unchanged
+      if (argName.startsWith('VERSION_')) {
+        return argName;
+      }
+      return valueMap[argName] ?? (params[argName] !== undefined ? String(params[argName]) : '');
+    });
   }
 
   /**
