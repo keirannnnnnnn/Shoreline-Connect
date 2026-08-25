@@ -49,8 +49,8 @@ export class AuthService {
     const adUrlSetting = db.prepare("SELECT value FROM system_settings WHERE key = 'ad_url'").get() as { value: string } | undefined;
     const adBaseDnSetting = db.prepare("SELECT value FROM system_settings WHERE key = 'ad_base_dn'").get() as { value: string } | undefined;
 
-    const adminGroupName = (adminGroupSetting?.value || config.ad.adminGroup).toLowerCase();
-    const userGroupName = (userGroupSetting?.value || config.ad.userGroup).toLowerCase();
+    const adminGroupName = (adminGroupSetting?.value || config.ad.adminGroup).toLowerCase().trim();
+    const userGroupName = (userGroupSetting?.value || config.ad.userGroup).toLowerCase().trim();
     const adUrl = adUrlSetting?.value || config.ad.url;
     const adBaseDn = adBaseDnSetting?.value || config.ad.baseDn;
 
@@ -87,12 +87,12 @@ export class AuthService {
       throw new Error('Authentication failed');
     }
 
-    // Determine role by AD group membership
-    const userGroups = authenticatedUser.groups.map(g => g.toLowerCase());
+    // Determine role by AD group membership (exact match against configured group names only)
+    const userGroups = authenticatedUser.groups.map(g => g.toLowerCase().trim());
     let role: 'admin' | 'user' = 'user';
     
-    const isAdminMember = userGroups.some(g => g.includes(adminGroupName) || g === 'domain admins' || g === 'administrators');
-    const isUserMember = userGroups.some(g => g.includes(userGroupName) || g === 'domain users') || isAdminMember;
+    const isAdminMember = userGroups.some(g => g === adminGroupName);
+    const isUserMember = userGroups.some(g => g === userGroupName) || isAdminMember;
 
     if (isAdminMember) {
       role = 'admin';

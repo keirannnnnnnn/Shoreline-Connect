@@ -20,6 +20,9 @@ RUN npm run build
 FROM node:24-alpine AS runner
 WORKDIR /app
 
+# Install sqlite3 cli tool for inspection/debugging
+RUN apk add --no-cache sqlite3
+
 ENV NODE_ENV=production
 ENV PORT=3001
 
