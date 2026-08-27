@@ -117,8 +117,6 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 		case <-sigChan:
 			log.Println("Received termination signal. Shutting down agent.")
 			return
-		case <-ticker.StopChan():
-			return
 		case <-ticker.C:
 			sendPayload(client, reportURL, token, col, sysInfo)
 		}
