@@ -210,35 +210,47 @@ export const MonitoringDetail: React.FC = () => {
               <SymbolIcon name="chevron.left" className="w-4 h-4" />
             </Link>
 
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-xl font-bold text-white">
-                  {sysInfo?.hostname || 'Device Telemetry'}
-                </h1>
-                <span
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                    agentInfo?.agent?.status === 'online'
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : agentInfo?.agent?.status === 'pending'
-                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                      : 'bg-red-500/10 text-red-400 border-red-500/20'
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      agentInfo?.agent?.status === 'online'
-                        ? 'bg-emerald-400 animate-pulse'
-                        : agentInfo?.agent?.status === 'pending'
-                        ? 'bg-amber-400'
-                        : 'bg-red-400'
-                    }`}
-                  />
-                  <span className="capitalize">{agentInfo?.agent?.status || 'Unknown'}</span>
-                </span>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-surface border border-surface-border flex items-center justify-center flex-shrink-0 p-1.5">
+                {sysInfo?.os?.toLowerCase().includes('win') || sysInfo?.platform?.toLowerCase().includes('win') ? (
+                  <SymbolIcon name="White WIndows 11 Icon.png" className="w-5 h-5" />
+                ) : sysInfo?.os?.toLowerCase().includes('linux') || sysInfo?.platform?.toLowerCase().includes('linux') ? (
+                  <SymbolIcon name="Linux Logo.png" className="w-5 h-5" />
+                ) : (
+                  <SymbolIcon name="waveform.path.ecg" className="w-5 h-5 text-brand-400" />
+                )}
               </div>
-              <p className="text-xs text-slate-400 font-mono mt-0.5">
-                {sysInfo?.os ? `${sysInfo.os} ${sysInfo.platform_version}` : 'Waiting for agent metadata...'}
-              </p>
+
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <h1 className="text-xl font-bold text-white">
+                    {sysInfo?.hostname || 'Device Telemetry'}
+                  </h1>
+                  <span
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                      agentInfo?.agent?.status === 'online'
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                        : agentInfo?.agent?.status === 'pending'
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                        : 'bg-red-500/10 text-red-400 border-red-500/20'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        agentInfo?.agent?.status === 'online'
+                          ? 'bg-emerald-400 animate-pulse'
+                          : agentInfo?.agent?.status === 'pending'
+                          ? 'bg-amber-400'
+                          : 'bg-red-400'
+                      }`}
+                    />
+                    <span className="capitalize">{agentInfo?.agent?.status || 'Unknown'}</span>
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 font-mono mt-0.5">
+                  {sysInfo?.platform_version || sysInfo?.os || 'Waiting for agent metadata...'}
+                </p>
+              </div>
             </div>
           </div>
 

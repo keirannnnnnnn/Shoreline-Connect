@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -23,6 +27,56 @@ var (
 	procGetTickCount64       = modkernel32.NewProc("GetTickCount64")
 	procGetIfTable           = modiphlpapi.NewProc("GetIfTable")
 )
+
+func getWindowsCPUModel() string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\CentralProcessor\0`, registry.QUERY_VALUE)
+	if err != nil {
+		return fmt.Sprintf("%s (%d cores)", runtime.GOARCH, runtime.NumCPU())
+	}
+	defer k.Close()
+
+	name, _, err := k.GetStringValue("ProcessorNameString")
+	if err != nil || strings.TrimSpace(name) == "" {
+		return fmt.Sprintf("%s (%d cores)", runtime.GOARCH, runtime.NumCPU())
+	}
+	return strings.TrimSpace(name)
+}
+
+func getWindowsOSVersion() (string, string) {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
+	if err != nil {
+		return "Windows", "Windows"
+	}
+	defer k.Close()
+
+	productName, _, _ := k.GetStringValue("ProductName")
+	displayVersion, _, _ := k.GetStringValue("DisplayVersion")
+	if displayVersion == "" {
+		displayVersion, _, _ = k.GetStringValue("ReleaseId")
+	}
+	buildStr, _, _ := k.GetStringValue("CurrentBuildNumber")
+	if buildStr == "" {
+		buildStr, _, _ = k.GetStringValue("CurrentBuild")
+	}
+
+	buildNum, _ := strconv.Atoi(buildStr)
+
+	// If build >= 22000, Windows NT reports "Windows 10" for legacy compatibility; fix to "Windows 11"
+	if buildNum >= 22000 && strings.Contains(productName, "Windows 10") {
+		productName = strings.Replace(productName, "Windows 10", "Windows 11", 1)
+	}
+
+	if productName == "" {
+		productName = "Windows"
+	}
+
+	formatted := productName
+	if displayVersion != "" {
+		formatted = fmt.Sprintf("%s %s", productName, displayVersion)
+	}
+
+	return "Windows", strings.TrimSpace(formatted)
+}
 
 type memoryStatusEx struct {
 	cbSize                  uint32
@@ -100,14 +154,17 @@ func (wc *WindowsCollector) GetSystemInfo() (*SystemInfo, error) {
 	memStatus.cbSize = uint32(unsafe.Sizeof(memStatus))
 	procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&memStatus)))
 
+	osName, osVersion := getWindowsOSVersion()
+	cpuModel := getWindowsCPUModel()
+
 	return &SystemInfo{
 		Hostname:     hostname,
-		OS:           "Windows",
+		OS:           osName,
 		Platform:     "Windows",
-		PlatformVer:  runtime.GOOS,
+		PlatformVer:  osVersion,
 		Kernel:       runtime.Version(),
 		Arch:         runtime.GOARCH,
-		CPUModel:     fmt.Sprintf("%s (%d cores)", runtime.GOARCH, runtime.NumCPU()),
+		CPUModel:     cpuModel,
 		CPUCores:     runtime.NumCPU(),
 		TotalRAM:     memStatus.ullTotalPhys,
 		TotalDisk:    totalDisk,

@@ -224,6 +224,15 @@ export const Monitoring: React.FC = () => {
                     <div className="flex items-start justify-between gap-3 mb-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
+                            {dev.system_info?.os?.toLowerCase().includes('win') || dev.system_info?.platform?.toLowerCase().includes('win') ? (
+                              <SymbolIcon name="White WIndows 11 Icon.png" className="w-3.5 h-3.5" />
+                            ) : dev.system_info?.os?.toLowerCase().includes('linux') || dev.system_info?.platform?.toLowerCase().includes('linux') ? (
+                              <SymbolIcon name="Linux Logo.png" className="w-3.5 h-3.5" />
+                            ) : (
+                              <SymbolIcon name="display" className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </div>
                           <h3 className="text-sm font-bold text-white group-hover:text-brand-300 transition-colors truncate">
                             {dev.device_name}
                           </h3>
@@ -234,7 +243,7 @@ export const Monitoring: React.FC = () => {
                           )}
                         </div>
                         <p className="text-[11px] text-slate-400 font-mono truncate mt-0.5">
-                          {dev.system_info?.hostname || dev.host}
+                          {dev.system_info?.platform_version || dev.system_info?.os || dev.system_info?.hostname || dev.host}
                         </p>
                       </div>
 
@@ -365,9 +374,9 @@ export const Monitoring: React.FC = () => {
 
                   {/* Card Footer: OS Specs, Uptime, Quick Connect */}
                   <div className="mt-4 pt-3 border-t border-surface-border flex items-center justify-between text-xs">
-                    <div className="text-[11px] text-slate-500 truncate max-w-[170px]">
-                      {dev.system_info?.os
-                        ? `${dev.system_info.os}`
+                    <div className="text-[11px] text-slate-500 truncate max-w-[170px]" title={dev.system_info?.platform_version || dev.system_info?.os || dev.host}>
+                      {dev.system_info?.platform_version || dev.system_info?.os
+                        ? `${dev.system_info.platform_version || dev.system_info.os}`
                         : m && m.uptime > 0
                         ? `Up: ${formatUptime(m.uptime)}`
                         : `Host: ${dev.host}`}

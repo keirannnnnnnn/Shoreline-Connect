@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 const svgCache = new Map<string, string>();
 
 interface SymbolIconProps extends React.SVGProps<SVGSVGElement> {
-  name: string; // SF Symbol name e.g. "display", "server.rack", "lock.fill", "star.fill"
+  name: string; // SF Symbol name e.g. "display", "server.rack", "lock.fill", "star.fill", or image names
   className?: string;
   size?: number | string;
 }
@@ -15,17 +15,30 @@ export const SymbolIcon: React.FC<SymbolIconProps> = ({
   size,
   ...props
 }) => {
-  const [svgContent, setSvgContent] = useState<string | null>(svgCache.get(name) || null);
+  // Normalize alias names for custom OS images in Symbols folder
+  let resolvedName = name;
+  const lower = name.toLowerCase();
+  if (lower === 'windows' || lower === 'windows11' || lower === 'win' || lower === 'windows 11') {
+    resolvedName = 'White WIndows 11 Icon.png';
+  } else if (lower === 'linux' || lower === 'tux') {
+    resolvedName = 'Linux Logo.png';
+  }
+
+  const isRasterImage = resolvedName.toLowerCase().endsWith('.png') || resolvedName.toLowerCase().endsWith('.jpg') || resolvedName.toLowerCase().endsWith('.webp');
+
+  const [svgContent, setSvgContent] = useState<string | null>(svgCache.get(resolvedName) || null);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    if (svgCache.has(name)) {
-      setSvgContent(svgCache.get(name)!);
+    if (isRasterImage) return;
+
+    if (svgCache.has(resolvedName)) {
+      setSvgContent(svgCache.get(resolvedName)!);
       return;
     }
 
     let isMounted = true;
-    const cleanName = name.endsWith('.svg') ? name : `${name}.svg`;
+    const cleanName = resolvedName.endsWith('.svg') ? resolvedName : `${resolvedName}.svg`;
 
     fetch(`/symbols/${cleanName}`)
       .then((res) => {
@@ -44,7 +57,7 @@ export const SymbolIcon: React.FC<SymbolIconProps> = ({
             .replace(/fill="#?[0-9a-fA-F]+"/gi, 'fill="currentColor"')
             .replace(/stroke="#?[0-9a-fA-F]+"/gi, 'stroke="currentColor"');
 
-          svgCache.set(name, cleaned);
+          svgCache.set(resolvedName, cleaned);
           setSvgContent(cleaned);
         }
       })
@@ -57,7 +70,22 @@ export const SymbolIcon: React.FC<SymbolIconProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [name]);
+  }, [resolvedName, isRasterImage]);
+
+  if (isRasterImage) {
+    return (
+      <span
+        className={`inline-flex items-center justify-center flex-shrink-0 ${className}`}
+        style={{ width: size, height: size }}
+      >
+        <img
+          src={`/symbols/${encodeURIComponent(resolvedName)}`}
+          alt={resolvedName}
+          className="w-full h-full object-contain pointer-events-none select-none"
+        />
+      </span>
+    );
+  }
 
   if (hasError || !svgContent) {
     // Elegant fallback icon (questionmark.circle)
