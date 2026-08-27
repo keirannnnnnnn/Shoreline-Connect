@@ -20,9 +20,14 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
   folders,
   isAdmin = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'credentials' | 'advanced'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'credentials' | 'advanced' | 'monitoring'>('general');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Monitoring state
+  const [monitoringInfo, setMonitoringInfo] = useState<any | null>(null);
+  const [installPlatform, setInstallPlatform] = useState<'linux' | 'windows'>('linux');
+  const [copiedCmd, setCopiedCmd] = useState(false);
 
   // Users list for admin on-behalf provisioning
   const [usersList, setUsersList] = useState<User[]>([]);
@@ -64,6 +69,11 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
       setPort(editDevice.port);
       setFolderId(editDevice.folder_id || '');
       setIsFavorite(!!editDevice.is_favorite);
+
+      // Fetch monitoring status
+      api.monitoring.getDeviceAgentStatus(editDevice.id)
+        .then((res) => setMonitoringInfo(res.info))
+        .catch(() => setMonitoringInfo(null));
 
       const params = typeof editDevice.parameters === 'string'
         ? JSON.parse(editDevice.parameters || '{}')
@@ -233,6 +243,19 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
           >
             <SymbolIcon name="slider.horizontal.3" className="w-4 h-4" />
             <span>3. Guacamole Tuning</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('monitoring')}
+            className={`pb-3 px-3 text-xs font-semibold border-b-2 flex items-center gap-2 transition-all ${
+              activeTab === 'monitoring'
+                ? 'border-brand-500 text-brand-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <SymbolIcon name="waveform.path.ecg" className="w-4 h-4" />
+            <span>4. Monitoring</span>
           </button>
         </div>
 
@@ -546,6 +569,147 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
                 </div>
               </div>
             )}
+
+            {/* TAB 4: MONITORING */}
+            {activeTab === 'monitoring' && (
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-surface border border-surface-border space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <SymbolIcon name="waveform.path.ecg" className="w-4 h-4 text-brand-400" />
+                        <span>Beszel-style Resource Monitoring</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Lightweight Go agent pushes CPU, RAM, Disk, Net, Load & Temp telemetry over HTTPS.
+                      </p>
+                    </div>
+
+                    {editDevice && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!editDevice) return;
+                          if (monitoringInfo) {
+                            if (confirm('Disable monitoring on this device?')) {
+                              await api.monitoring.disable(editDevice.id);
+                              setMonitoringInfo(null);
+                            }
+                          } else {
+                            const res = await api.monitoring.enable(editDevice.id);
+                            setMonitoringInfo({
+                              agent: res.agent,
+                              rawToken: res.rawToken,
+                              installLinux: res.installLinux,
+                              installWindows: res.installWindows,
+                            });
+                          }
+                        }}
+                        className={`px-3 py-1 rounded-xl text-xs font-semibold border transition-all ${
+                          monitoringInfo
+                            ? 'bg-danger/10 border-danger/30 text-danger hover:bg-danger/20'
+                            : 'bg-brand-600 hover:bg-brand-500 text-white shadow-glow'
+                        }`}
+                      >
+                        {monitoringInfo ? 'Disable Monitoring' : 'Enable Monitoring'}
+                      </button>
+                    )}
+                  </div>
+
+                  {!editDevice ? (
+                    <div className="pt-2 border-t border-surface-border/60">
+                      <p className="text-xs text-slate-300">
+                        ⚡ Monitoring can be activated immediately once the device is created. You will receive a one-command install script on the device dashboard.
+                      </p>
+                    </div>
+                  ) : monitoringInfo ? (
+                    <div className="space-y-3 pt-3 border-t border-surface-border">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400">Agent Status:</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                            monitoringInfo.agent.status === 'online'
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              : monitoringInfo.agent.status === 'pending'
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              : 'bg-red-500/10 text-red-400 border-red-500/20'
+                          }`}>
+                            <span className="capitalize">{monitoringInfo.agent.status}</span>
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!editDevice || !confirm('Regenerate agent token?')) return;
+                            const res = await api.monitoring.regenerateToken(editDevice.id);
+                            setMonitoringInfo({
+                              agent: res.agent,
+                              rawToken: res.rawToken,
+                              installLinux: res.installLinux,
+                              installWindows: res.installWindows,
+                            });
+                          }}
+                          className="text-[11px] text-danger hover:underline"
+                        >
+                          Regenerate Token
+                        </button>
+                      </div>
+
+                      {/* Script Platform Tabs */}
+                      <div className="flex rounded-xl bg-surface-card p-1 border border-surface-border text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setInstallPlatform('linux')}
+                          className={`flex-1 py-1 rounded-lg font-medium transition-all ${
+                            installPlatform === 'linux' ? 'bg-brand-600 text-white' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Linux (curl | sudo bash)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInstallPlatform('windows')}
+                          className={`flex-1 py-1 rounded-lg font-medium transition-all ${
+                            installPlatform === 'windows' ? 'bg-brand-600 text-white' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Windows (PowerShell)
+                        </button>
+                      </div>
+
+                      <div className="relative">
+                        <pre className="p-3 rounded-xl bg-surface-card border border-surface-border text-[11px] font-mono text-emerald-400 overflow-x-auto whitespace-pre-wrap break-all select-all">
+                          {installPlatform === 'linux' ? monitoringInfo.installLinux : monitoringInfo.installWindows}
+                        </pre>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cmd = installPlatform === 'linux' ? monitoringInfo.installLinux : monitoringInfo.installWindows;
+                            navigator.clipboard.writeText(cmd);
+                            setCopiedCmd(true);
+                            setTimeout(() => setCopiedCmd(false), 2000);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-surface-card hover:bg-surface-hover border border-surface-border text-xs font-semibold text-white transition-all flex items-center gap-1.5"
+                        >
+                          <SymbolIcon name={copiedCmd ? 'checkmark' : 'doc.on.clipboard'} className="w-3.5 h-3.5" />
+                          <span>{copiedCmd ? 'Copied!' : 'Copy Install Command'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pt-2 border-t border-surface-border/60">
+                      <p className="text-xs text-slate-400">
+                        Monitoring is currently not enabled for this device. Click <strong className="text-white">Enable Monitoring</strong> above to generate your one-command install script.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Footer Actions */}
@@ -562,17 +726,25 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
               {activeTab !== 'general' && (
                 <button
                   type="button"
-                  onClick={() => setActiveTab(activeTab === 'advanced' ? 'credentials' : 'general')}
+                  onClick={() => {
+                    if (activeTab === 'monitoring') setActiveTab('advanced');
+                    else if (activeTab === 'advanced') setActiveTab('credentials');
+                    else setActiveTab('general');
+                  }}
                   className="px-3.5 py-2 rounded-xl bg-surface-card hover:bg-surface-hover border border-surface-border text-slate-300 text-xs font-semibold transition-colors"
                 >
                   Previous
                 </button>
               )}
 
-              {activeTab !== 'advanced' ? (
+              {activeTab !== 'monitoring' ? (
                 <button
                   type="button"
-                  onClick={() => setActiveTab(activeTab === 'general' ? 'credentials' : 'advanced')}
+                  onClick={() => {
+                    if (activeTab === 'general') setActiveTab('credentials');
+                    else if (activeTab === 'credentials') setActiveTab('advanced');
+                    else setActiveTab('monitoring');
+                  }}
                   className="px-4 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-surface-borderLight text-white text-xs font-semibold transition-colors"
                 >
                   Next Step

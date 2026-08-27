@@ -48,6 +48,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
               <SymbolIcon name="macbook.and.iphone" className="w-4 h-4" />
               <span>Devices</span>
             </Link>
+
+            <Link
+              to="/monitoring"
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                location.pathname.startsWith('/monitoring')
+                  ? 'bg-surface-active text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+              }`}
+            >
+              <SymbolIcon name="waveform.path.ecg" className="w-4 h-4" />
+              <span>Monitoring</span>
+            </Link>
           </nav>
         </div>
 

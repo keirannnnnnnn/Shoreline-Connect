@@ -108,6 +108,84 @@ export function initDatabase() {
       value TEXT NOT NULL,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS monitoring_agents (
+      id TEXT PRIMARY KEY,
+      device_id TEXT UNIQUE NOT NULL,
+      token_hash TEXT NOT NULL,
+      token_preview TEXT NOT NULL,
+      token_encrypted TEXT NOT NULL,
+      status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'online', 'offline')),
+      last_seen_at DATETIME,
+      system_info TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_monitoring_agents_token_hash ON monitoring_agents(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_agents_device ON monitoring_agents(device_id);
+
+    CREATE TABLE IF NOT EXISTS monitoring_metrics_raw (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      cpu_usage REAL NOT NULL,
+      cpu_per_core TEXT,
+      ram_used INTEGER NOT NULL,
+      ram_total INTEGER NOT NULL,
+      ram_percent REAL NOT NULL,
+      swap_used INTEGER,
+      swap_total INTEGER,
+      swap_percent REAL,
+      disk_read_bytes_sec REAL,
+      disk_write_bytes_sec REAL,
+      net_rx_bytes_sec REAL,
+      net_tx_bytes_sec REAL,
+      cpu_temp REAL,
+      load_1 REAL,
+      load_5 REAL,
+      load_15 REAL,
+      uptime INTEGER,
+      disks TEXT,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_metrics_raw_dev_time ON monitoring_metrics_raw(device_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS monitoring_metrics_rollup_5m (
+      device_id TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      cpu_usage_avg REAL NOT NULL,
+      cpu_usage_max REAL NOT NULL,
+      ram_percent_avg REAL NOT NULL,
+      disk_read_bytes_sec_avg REAL,
+      disk_write_bytes_sec_avg REAL,
+      net_rx_bytes_sec_avg REAL,
+      net_tx_bytes_sec_avg REAL,
+      cpu_temp_avg REAL,
+      load_1_avg REAL,
+      PRIMARY KEY (device_id, timestamp)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_metrics_5m_dev_time ON monitoring_metrics_rollup_5m(device_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS monitoring_metrics_rollup_1h (
+      device_id TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      cpu_usage_avg REAL NOT NULL,
+      cpu_usage_max REAL NOT NULL,
+      ram_percent_avg REAL NOT NULL,
+      disk_read_bytes_sec_avg REAL,
+      disk_write_bytes_sec_avg REAL,
+      net_rx_bytes_sec_avg REAL,
+      net_tx_bytes_sec_avg REAL,
+      cpu_temp_avg REAL,
+      load_1_avg REAL,
+      PRIMARY KEY (device_id, timestamp)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_metrics_1h_dev_time ON monitoring_metrics_rollup_1h(device_id, timestamp);
   `);
 
   // Initialize default settings if not exists

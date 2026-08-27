@@ -1,4 +1,11 @@
-# Multi-stage production build for Shoreline Connect
+# Stage 0: Build Standalone Go Monitoring Agents
+FROM golang:1.24-alpine AS agent-builder
+WORKDIR /build
+COPY agent/ ./
+RUN mkdir -p /binaries && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-linux-amd64 . && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-linux-arm64 . && \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-windows-amd64.exe .
 
 # Stage 1: Build Frontend SPA
 FROM node:24-alpine AS client-builder
@@ -32,6 +39,7 @@ RUN cd server && npm install --omit=dev
 
 COPY --from=server-builder /app/server/dist ./server/dist
 COPY --from=client-builder /app/client/dist ./client/dist
+COPY --from=agent-builder /binaries ./server/agents
 COPY Symbols ./Symbols
 
 EXPOSE 3001

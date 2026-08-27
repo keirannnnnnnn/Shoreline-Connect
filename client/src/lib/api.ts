@@ -136,5 +136,119 @@ export const api = {
   symbols: {
     search: (q: string, limit = 60) =>
       fetchJson<{ symbols: string[]; total: number }>(`/symbols/search?q=${encodeURIComponent(q)}&limit=${limit}`),
-  }
+  },
+
+  monitoring: {
+    getDevices: () =>
+      fetchJson<{ devices: MonitoredDevice[] }>('/monitoring/devices'),
+    getDeviceAgentStatus: (deviceId: string) =>
+      fetchJson<{ info: MonitoringAgentInfo | null }>('/monitoring/devices/' + deviceId),
+    enable: (deviceId: string) =>
+      fetchJson<{ agent: any; rawToken: string; installLinux: string; installWindows: string }>('/monitoring/devices/' + deviceId + '/enable', {
+        method: 'POST',
+      }),
+    regenerateToken: (deviceId: string) =>
+      fetchJson<{ agent: any; rawToken: string; installLinux: string; installWindows: string }>('/monitoring/devices/' + deviceId + '/regenerate-token', {
+        method: 'POST',
+      }),
+    disable: (deviceId: string) =>
+      fetchJson<{ success: boolean }>('/monitoring/devices/' + deviceId + '/disable', {
+        method: 'POST',
+      }),
+    getMetrics: (deviceId: string, range: '1h' | '6h' | '24h' | '7d' | '30d' | '120d' = '1h') =>
+      fetchJson<{ range: string; resolution: string; points: MetricPoint[] }>('/monitoring/devices/' + deviceId + '/metrics?range=' + range),
+  },
 };
+
+export interface MonitoredDevice {
+  id: string;
+  device_id: string;
+  device_name: string;
+  protocol: 'rdp' | 'vnc' | 'ssh';
+  host: string;
+  is_shared: boolean;
+  shared_by_user?: string;
+  status: 'pending' | 'online' | 'offline';
+  last_seen_at: string | null;
+  system_info: {
+    hostname: string;
+    os: string;
+    platform: string;
+    platform_version: string;
+    kernel: string;
+    arch: string;
+    cpu_model: string;
+    cpu_cores: number;
+    total_ram: number;
+    total_disk: number;
+    agent_version: string;
+    disks?: Array<{
+      mount_point: string;
+      device: string;
+      fs_type: string;
+      total_bytes: number;
+      used_bytes: number;
+      free_bytes: number;
+      used_pct: number;
+    }>;
+  } | null;
+  current_metrics: {
+    cpu_usage: number;
+    ram_percent: number;
+    ram_used: number;
+    ram_total: number;
+    disk_percent: number;
+    net_rx_bytes_sec: number;
+    net_tx_bytes_sec: number;
+    cpu_temp: number | null;
+    uptime: number;
+  } | null;
+}
+
+export interface MonitoringAgentInfo {
+  agent: {
+    id: string;
+    device_id: string;
+    token_preview: string;
+    status: 'pending' | 'online' | 'offline';
+    last_seen_at: string | null;
+    system_info: any | null;
+    created_at: string;
+    updated_at: string;
+  };
+  rawToken: string;
+  installLinux: string;
+  installWindows: string;
+}
+
+export interface MetricPoint {
+  timestamp: number;
+  cpu_usage: number;
+  cpu_usage_max?: number;
+  cpu_per_core?: number[] | null;
+  ram_used?: number;
+  ram_total?: number;
+  ram_percent: number;
+  swap_used?: number;
+  swap_total?: number;
+  swap_percent?: number;
+  disk_read_bytes_sec?: number;
+  disk_write_bytes_sec?: number;
+  net_rx_bytes_sec?: number;
+  net_tx_bytes_sec?: number;
+  cpu_temp?: number | null;
+  load_1?: number | null;
+  load_5?: number | null;
+  load_15?: number | null;
+  uptime?: number;
+  disks?: Array<{
+    mount_point: string;
+    device: string;
+    fs_type: string;
+    total_bytes: number;
+    used_bytes: number;
+    free_bytes: number;
+    used_pct: number;
+  }> | null;
+}
+

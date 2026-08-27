@@ -6,6 +6,8 @@ import { Dashboard } from './pages/Dashboard.js';
 import { SessionViewer } from './pages/SessionViewer.js';
 import { GuestJoin } from './pages/GuestJoin.js';
 import { Settings } from './pages/Settings.js';
+import { Monitoring } from './pages/Monitoring.js';
+import { MonitoringDetail } from './pages/MonitoringDetail.js';
 import { SymbolIcon } from './components/SymbolIcon.js';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -38,6 +40,22 @@ export const App: React.FC = () => {
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/monitoring"
+            element={
+              <ProtectedRoute>
+                <Monitoring />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/monitoring/:id"
+            element={
+              <ProtectedRoute>
+                <MonitoringDetail />
               </ProtectedRoute>
             }
           />

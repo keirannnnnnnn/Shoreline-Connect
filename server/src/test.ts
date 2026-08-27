@@ -6,6 +6,7 @@ import { SharingService } from './services/sharing.service.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { GuacdService } from './services/guacd.service.js';
+import { MonitoringService } from './services/monitoring.service.js';
 
 async function runTests() {
   console.log('🧪 Starting Shoreline Connect Automated Backend Tests...\n');
@@ -181,7 +182,81 @@ async function runTests() {
 
   const auditLogs = AuditService.getSessionLogs({ search: 'Linux Workstation' });
   assert(auditLogs.total > 0, 'Audit logs must contain recorded session');
-  console.log('  ✅ Audit logging passed.\n');
+  // 9. Test Device Monitoring Subsystem (Token Lifecycle, Ingest, Rollup & Isolation)
+  console.log('▶ Test 9: Device Monitoring Subsystem (Tokens, Ingest, Rollup & Isolation)');
+  
+  // 9.1 Enable monitoring on userDevice
+  const monEnable = MonitoringService.enableMonitoring(userDevice.id, userId, 'http://localhost:3001');
+  assert(monEnable.rawToken.startsWith('sh_mon_'), 'Must generate valid sh_mon_ token');
+  assert(monEnable.installLinux.includes('curl'), 'Linux install command must contain curl');
+  assert(monEnable.installWindows.includes('irm'), 'Windows install command must contain irm');
+
+  // 9.2 Fast token authentication
+  const authAgent = MonitoringService.authenticateAgentToken(monEnable.rawToken);
+  assert(authAgent && authAgent.deviceId === userDevice.id, 'Agent authentication must resolve correct deviceId');
+
+  // 9.3 Ingest metrics payload
+  const testPayload = {
+    timestamp: Math.floor(Date.now() / 1000),
+    cpu_usage: 23.5,
+    cpu_per_core: [20.1, 26.9],
+    ram_used: 4 * 1024 * 1024 * 1024,
+    ram_total: 16 * 1024 * 1024 * 1024,
+    ram_percent: 25.0,
+    disk_read_bytes_sec: 1048576,
+    disk_write_bytes_sec: 2097152,
+    net_rx_bytes_sec: 524288,
+    net_tx_bytes_sec: 131072,
+    cpu_temp: 45.0,
+    load_1: 0.85,
+    uptime: 86400,
+    disks: [
+      {
+        mount_point: '/',
+        device: '/dev/sda1',
+        fs_type: 'ext4',
+        total_bytes: 500 * 1024 * 1024 * 1024,
+        used_bytes: 120 * 1024 * 1024 * 1024,
+        free_bytes: 380 * 1024 * 1024 * 1024,
+        used_pct: 24.0,
+      }
+    ],
+    system_info: {
+      hostname: 'test-linux-vm',
+      os: 'Ubuntu 24.04 LTS',
+      platform: 'Linux',
+      platform_version: '24.04',
+      kernel: '6.8.0-generic',
+      arch: 'amd64',
+      cpu_model: 'AMD EPYC 7763',
+      cpu_cores: 4,
+      total_ram: 16 * 1024 * 1024 * 1024,
+      total_disk: 500 * 1024 * 1024 * 1024,
+      agent_version: '1.0.0',
+    },
+  };
+
+  MonitoringService.recordMetrics(userDevice.id, testPayload);
+
+  // 9.4 Verify user can retrieve monitored device summary
+  const userMonDevices = MonitoringService.getUserMonitoredDevices(userId);
+  const foundMon = userMonDevices.find(d => d.device_id === userDevice.id);
+  assert(foundMon && foundMon.status === 'online', 'Monitored device must appear as online');
+  assert.strictEqual(foundMon.current_metrics?.cpu_usage, 23.5, 'CPU usage must match reported metric');
+
+  // 9.5 Verify strict multi-tenant isolation: Admin MUST NOT see user's personal monitored device
+  const adminMonDevices = MonitoringService.getUserMonitoredDevices(adminId);
+  assert(!adminMonDevices.some(d => d.device_id === userDevice.id), 'Admin MUST NOT see unshared user monitored device');
+
+  // 9.6 Time-series metric query
+  const metricsResult = MonitoringService.getDeviceMetrics(userDevice.id, userId, '1h');
+  assert(metricsResult.points.length > 0, 'Must return recorded metrics points');
+  assert.strictEqual(metricsResult.points[0].cpu_usage, 23.5, 'Metrics point must contain recorded CPU value');
+
+  // 9.7 Rollup & Retention engine test
+  MonitoringService.runRollupAndRetention();
+
+  console.log('  ✅ Monitoring token lifecycle, ingestion, rollup & isolation verified.\n');
 
   console.log('🎉 ALL BACKEND TESTS PASSED SUCCESSFULLY!\n');
 }
@@ -190,3 +265,4 @@ runTests().catch(err => {
   console.error('❌ Test failed:', err);
   process.exit(1);
 });
+

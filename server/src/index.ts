@@ -16,9 +16,12 @@ import deviceRoutes from './routes/device.routes.js';
 import shareRoutes from './routes/share.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import symbolRoutes from './routes/symbol.routes.js';
+import { monitoringRouter } from './routes/monitoring.routes.js';
+import { MonitoringService } from './services/monitoring.service.js';
 
-// 1. Initialize SQLite Database
+// 1. Initialize SQLite Database & Background Jobs
 initDatabase();
+MonitoringService.startBackgroundJob();
 
 // 2. Setup Express application
 const app = express();
@@ -36,6 +39,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/shares', shareRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/symbols', symbolRoutes);
+app.use('/api/monitoring', monitoringRouter);
 
 // Direct static route for Symbols
 app.use('/symbols', express.static(config.symbolsDir, {
