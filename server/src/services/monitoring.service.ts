@@ -133,6 +133,20 @@ export class MonitoringService {
     return null;
   }
 
+  private static normalizeHubUrl(rawUrl: string): string {
+    let clean = rawUrl.trim().replace(/\/+$/, '');
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = `http://${clean}`;
+    }
+    try {
+      const parsed = new URL(clean);
+      if (!parsed.port && parsed.protocol === 'http:') {
+        clean = `${parsed.protocol}//${parsed.hostname}:${config.port}`;
+      }
+    } catch {}
+    return clean;
+  }
+
   /**
    * Determine the effective Hub URL for agent metrics push:
    * Prioritizes:
@@ -147,21 +161,18 @@ export class MonitoringService {
     try {
       const row = db.prepare("SELECT value FROM system_settings WHERE key = 'monitoring_hub_url'").get() as { value: string } | undefined;
       if (row && row.value && row.value.trim().length > 0) {
-        return row.value.trim().replace(/\/+$/, '');
+        return this.normalizeHubUrl(row.value);
       }
     } catch {}
 
     // 2. Check process.env.MONITORING_HUB_URL
     if (process.env.MONITORING_HUB_URL && process.env.MONITORING_HUB_URL.trim().length > 0) {
-      return process.env.MONITORING_HUB_URL.trim().replace(/\/+$/, '');
+      return this.normalizeHubUrl(process.env.MONITORING_HUB_URL);
     }
 
     // 3. Check process.env.TAILSCALE_IP
     if (process.env.TAILSCALE_IP && process.env.TAILSCALE_IP.trim().length > 0) {
-      const tsIp = process.env.TAILSCALE_IP.trim();
-      const proto = tsIp.startsWith('http://') || tsIp.startsWith('https://') ? '' : 'http://';
-      const portSuffix = tsIp.includes(':') ? '' : `:${config.port}`;
-      return `${proto}${tsIp}${portSuffix}`.replace(/\/+$/, '');
+      return this.normalizeHubUrl(process.env.TAILSCALE_IP);
     }
 
     // 4. Auto-detect host Tailscale IP

@@ -17,7 +17,7 @@ services:
     container_name: shoreline-connect
     restart: unless-stopped
     ports:
-      - "3000:3001"
+      - "3001:3001"
     environment:
       - PORT=3001
       - NODE_ENV=production
@@ -31,6 +31,8 @@ services:
       - DEV_AUTH_MODE=false
       - GUACD_HOST=guacd
       - GUACD_PORT=4822
+      - TAILSCALE_IP=100.99.99.176
+      - MONITORING_HUB_URL=http://100.99.99.176:3001
     volumes:
       - ./data:/app/server/data
       - ./Symbols:/app/Symbols:ro
