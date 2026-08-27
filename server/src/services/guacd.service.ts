@@ -14,6 +14,93 @@ export interface GuacamoleTunnelSession {
   userAgent?: string;
 }
 
+/**
+ * Robust streaming Guacamole protocol parser.
+ * Correctly parses length-prefixed elements according to the Guacamole protocol specification.
+ * Prevents corruption when binary/image/blob payloads (e.g. VNC PNG/JPEG chunks) contain semicolons.
+ */
+export class GuacamoleParser {
+  private buffer = '';
+  private elementEnd = -1;
+  private startIndex = 0;
+  private elementBuffer: string[] = [];
+  private instructionStartIndex = 0;
+
+  constructor(
+    private onInstruction: (opcode: string, args: string[], raw: string) => void
+  ) {}
+
+  public receive(chunk: string) {
+    // Truncate buffer periodically when parsed past threshold to keep memory bounded
+    if (this.startIndex > 8192 && this.elementEnd >= this.startIndex) {
+      this.buffer = this.buffer.substring(this.startIndex);
+      this.elementEnd -= this.startIndex;
+      this.instructionStartIndex = 0;
+      this.startIndex = 0;
+    }
+
+    this.buffer += chunk;
+
+    while (this.elementEnd < this.buffer.length) {
+      if (this.elementEnd >= this.startIndex) {
+        const element = this.buffer.substring(this.startIndex, this.elementEnd);
+        const terminator = this.buffer.charAt(this.elementEnd);
+
+        this.elementBuffer.push(element);
+
+        if (terminator === ';') {
+          const raw = this.buffer.substring(this.instructionStartIndex, this.elementEnd + 1);
+          const opcode = this.elementBuffer[0];
+          const args = this.elementBuffer.slice(1);
+
+          this.onInstruction(opcode, args, raw);
+
+          this.elementBuffer = [];
+          this.instructionStartIndex = this.elementEnd + 1;
+        } else if (terminator !== ',') {
+          // Syntax error or corrupt terminator: reset parser to next semicolon
+          this.elementBuffer = [];
+          const nextSemi = this.buffer.indexOf(';', this.elementEnd);
+          if (nextSemi === -1) {
+            this.buffer = '';
+            this.elementEnd = -1;
+            this.startIndex = 0;
+            this.instructionStartIndex = 0;
+            break;
+          }
+          this.startIndex = nextSemi + 1;
+          this.instructionStartIndex = nextSemi + 1;
+          this.elementEnd = -1;
+          continue;
+        }
+
+        this.startIndex = this.elementEnd + 1;
+      }
+
+      const lengthEnd = this.buffer.indexOf('.', this.startIndex);
+      if (lengthEnd !== -1) {
+        const lengthStr = this.buffer.substring(this.startIndex, lengthEnd);
+        const length = parseInt(lengthStr, 10);
+        if (isNaN(length) || length < 0) {
+          // Invalid length prefix: reset
+          this.buffer = '';
+          this.elementEnd = -1;
+          this.startIndex = 0;
+          this.instructionStartIndex = 0;
+          this.elementBuffer = [];
+          break;
+        }
+
+        this.startIndex = lengthEnd + 1;
+        this.elementEnd = this.startIndex + length;
+      } else {
+        // Incomplete length prefix, wait for more data from TCP stream
+        break;
+      }
+    }
+  }
+}
+
 export class GuacdService {
   /**
    * Parse a single Guacamole instruction string (length-prefixed CSV, ending in ';')
@@ -53,8 +140,7 @@ export class GuacdService {
     return elements
       .map(el => {
         const str = el !== undefined && el !== null ? String(el) : '';
-        const byteLen = Buffer.byteLength(str, 'utf8');
-        return `${byteLen}.${str}`;
+        return `${str.length}.${str}`;
       })
       .join(',') + ';';
   }
@@ -94,7 +180,11 @@ export class GuacdService {
     // Connect to guacd TCP socket
     const guacdSocket = new net.Socket();
     let isConnectedToGuacd = false;
-    let guacdBuffer = '';
+
+    // Streaming protocol parser to handle length-prefixed instructions cleanly
+    const parser = new GuacamoleParser((opcode, args, rawInstruction) => {
+      this.processGuacdInstruction(opcode, args, rawInstruction, guacdSocket, ws, deviceConfig, clientParams);
+    });
 
     guacdSocket.connect(config.guacd.port, config.guacd.host, () => {
       isConnectedToGuacd = true;
@@ -106,18 +196,7 @@ export class GuacdService {
     });
 
     guacdSocket.on('data', (data) => {
-      const incoming = data.toString('utf8');
-      guacdBuffer += incoming;
-
-      // Process complete instructions separated by ';'
-      let semicolonIndex = guacdBuffer.indexOf(';');
-      while (semicolonIndex !== -1) {
-        const instruction = guacdBuffer.substring(0, semicolonIndex + 1);
-        guacdBuffer = guacdBuffer.substring(semicolonIndex + 1);
-
-        this.processGuacdInstruction(instruction, guacdSocket, ws, deviceConfig, clientParams);
-        semicolonIndex = guacdBuffer.indexOf(';');
-      }
+      parser.receive(data.toString('utf8'));
     });
 
     guacdSocket.on('error', (err) => {
@@ -168,7 +247,9 @@ export class GuacdService {
    * Process and forward Guacamole protocol instructions
    */
   private static processGuacdInstruction(
-    instruction: string,
+    opcode: string,
+    args: string[],
+    rawInstruction: string,
     guacdSocket: net.Socket,
     ws: WebSocket,
     deviceConfig: {
@@ -182,12 +263,9 @@ export class GuacdService {
     },
     clientParams: { width?: number; height?: number; dpi?: number; audio?: string[] }
   ) {
-    const parsed = this.parseInstruction(instruction);
-    const opcode = parsed[0];
-
     // Handle handshake "args" instruction from guacd
     if (opcode === 'args') {
-      const expectedArgs = parsed.slice(1);
+      const expectedArgs = args;
       const width = clientParams.width || deviceConfig.parameters.width || 1280;
       const height = clientParams.height || deviceConfig.parameters.height || 720;
       const dpi = clientParams.dpi || deviceConfig.parameters.dpi || 96;
@@ -220,9 +298,9 @@ export class GuacdService {
       return;
     }
 
-    // Forward all other instructions (ready, sync, draw, copy, mouse, key, etc.) to WebSocket
+    // Forward all other instructions (ready, sync, png, img, rect, copy, cfill, mouse, key, etc.) intact to WebSocket
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(instruction);
+      ws.send(rawInstruction);
     }
   }
 
@@ -261,6 +339,18 @@ export class GuacdService {
       'dpi': String(dpi),
       'color-depth': String(params.colorDepth || 24),
       
+      // VNC-specific parameters
+      'read-only': params.readOnly ? 'true' : 'false',
+      'encodings': params.encodings || '',
+      'swap-red-blue': params.swapRedBlue ? 'true' : 'false',
+      'autoretry': String(params.autoretry || 0),
+      'clipboard-encoding': params.clipboardEncoding || 'UTF-8',
+
+      // Cursor: VNC expects 'remote' or 'local' (or empty); SSH expects 'ibeam'/'block'/'underline'
+      'cursor': deviceConfig.protocol === 'vnc' 
+        ? (params.cursor || 'remote') 
+        : (deviceConfig.protocol === 'ssh' ? (params.cursorStyle || 'ibeam') : ''),
+
       // Audio settings
       'enable-audio': params.audio !== false ? 'true' : 'false',
       'disable-audio': params.audio === false ? 'true' : 'false',
@@ -292,7 +382,6 @@ export class GuacdService {
 
       // Terminal (SSH)
       'font-size': String(params.fontSize || 14),
-      'cursor': params.cursorStyle || 'ibeam',
       'scrollback': '2000',
     };
 
