@@ -41,7 +41,7 @@ type LinuxCollector struct {
 	prevCoreCPUs  []cpuTimeStat
 }
 
-func newLinuxCollector() Collector {
+func newPlatformCollector() Collector {
 	return &LinuxCollector{
 		BaseCollector: BaseCollector{
 			LastCollectTime: time.Now(),

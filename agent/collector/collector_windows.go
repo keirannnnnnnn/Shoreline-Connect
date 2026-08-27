@@ -79,7 +79,7 @@ type WindowsCollector struct {
 	prevUserTime   uint64
 }
 
-func newWindowsCollector() Collector {
+func newPlatformCollector() Collector {
 	return &WindowsCollector{
 		BaseCollector: BaseCollector{
 			LastCollectTime: time.Now(),

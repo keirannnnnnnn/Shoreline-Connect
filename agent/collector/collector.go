@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"runtime"
 	"time"
 )
 
@@ -24,8 +23,5 @@ type BaseCollector struct {
 }
 
 func NewCollector() Collector {
-	if runtime.GOOS == "windows" {
-		return newWindowsCollector()
-	}
-	return newLinuxCollector()
+	return newPlatformCollector()
 }
