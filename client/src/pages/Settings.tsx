@@ -29,6 +29,7 @@ export const Settings: React.FC = () => {
     ad_user_group: 'Shoreline-Users',
     git_repo_url: '',
     git_branch: 'main',
+    monitoring_hub_url: '',
   });
   const [adSaveStatus, setAdSaveStatus] = useState<string | null>(null);
 
@@ -541,6 +542,23 @@ export const Settings: React.FC = () => {
                         className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-blue-500/40 text-white text-sm font-mono focus:ring-1 focus:ring-purple-500 focus:outline-none"
                       />
                     </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold text-emerald-300 mb-1.5 flex items-center justify-between">
+                        <span>Monitoring Agent Hub URL / Tailscale IP Address</span>
+                        <span className="text-[11px] text-slate-400 font-normal">Bypasses Cloudflare Zero Trust for agent push</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={adSettings.monitoring_hub_url || ''}
+                        onChange={(e) => setAdSettings({ ...adSettings, monitoring_hub_url: e.target.value })}
+                        placeholder="e.g. http://100.x.y.z:3001 or http://sln-access-001:3001 (Leave blank to auto-detect Tailscale IP)"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-emerald-500/40 text-white text-sm font-mono focus:ring-1 focus:ring-emerald-500 focus:outline-none placeholder-slate-600"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        When configured or auto-detected via Tailscale (100.64.0.0/10), agent install commands and telemetry reporting target this internal IP directly without hitting public reverse proxy / Zero Trust auth walls.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="pt-4 border-t border-surface-border flex justify-end">
@@ -549,7 +567,7 @@ export const Settings: React.FC = () => {
                       disabled={loading}
                       className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-glow shadow-purple-500/20 transition-all"
                     >
-                      Save Active Directory Settings
+                      Save System Settings
                     </button>
                   </div>
                 </form>

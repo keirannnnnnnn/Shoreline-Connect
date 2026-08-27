@@ -197,6 +197,7 @@ export function initDatabase() {
   insertSetting.run('ad_user_group', config.ad.userGroup);
   insertSetting.run('git_repo_url', config.git.repoUrl);
   insertSetting.run('git_branch', config.git.branch);
+  insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');
 
   console.log('✅ SQLite Database initialized at:', dbPath);
 }

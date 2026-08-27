@@ -112,7 +112,8 @@ export interface SystemSettings {
   ad_user_group: string;
   git_repo_url: string;
   git_branch: string;
-  [key: string]: string;
+  monitoring_hub_url?: string;
+  [key: string]: string | undefined;
 }
 
 export interface UpdateStatus {

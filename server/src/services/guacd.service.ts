@@ -21,81 +21,82 @@ export interface GuacamoleTunnelSession {
  */
 export class GuacamoleParser {
   private buffer = '';
-  private elementEnd = -1;
-  private startIndex = 0;
   private elementBuffer: string[] = [];
-  private instructionStartIndex = 0;
+  private startIndex = 0;
+  private elementEnd = -1;
 
   constructor(
     private onInstruction: (opcode: string, args: string[], raw: string) => void
   ) {}
 
   public receive(chunk: string) {
-    // Truncate buffer periodically when parsed past threshold to keep memory bounded
-    if (this.startIndex > 8192 && this.elementEnd >= this.startIndex) {
-      this.buffer = this.buffer.substring(this.startIndex);
-      this.elementEnd -= this.startIndex;
-      this.instructionStartIndex = 0;
-      this.startIndex = 0;
-    }
-
     this.buffer += chunk;
 
-    while (this.elementEnd < this.buffer.length) {
-      if (this.elementEnd >= this.startIndex) {
-        const element = this.buffer.substring(this.startIndex, this.elementEnd);
-        const terminator = this.buffer.charAt(this.elementEnd);
-
-        this.elementBuffer.push(element);
-
-        if (terminator === ';') {
-          const raw = this.buffer.substring(this.instructionStartIndex, this.elementEnd + 1);
-          const opcode = this.elementBuffer[0];
-          const args = this.elementBuffer.slice(1);
-
-          this.onInstruction(opcode, args, raw);
-
-          this.elementBuffer = [];
-          this.instructionStartIndex = this.elementEnd + 1;
-        } else if (terminator !== ',') {
-          // Syntax error or corrupt terminator: reset parser to next semicolon
-          this.elementBuffer = [];
-          const nextSemi = this.buffer.indexOf(';', this.elementEnd);
-          if (nextSemi === -1) {
-            this.buffer = '';
-            this.elementEnd = -1;
-            this.startIndex = 0;
-            this.instructionStartIndex = 0;
-            break;
-          }
-          this.startIndex = nextSemi + 1;
-          this.instructionStartIndex = nextSemi + 1;
-          this.elementEnd = -1;
-          continue;
-        }
-
-        this.startIndex = this.elementEnd + 1;
-      }
-
-      const lengthEnd = this.buffer.indexOf('.', this.startIndex);
-      if (lengthEnd !== -1) {
-        const lengthStr = this.buffer.substring(this.startIndex, lengthEnd);
-        const length = parseInt(lengthStr, 10);
-        if (isNaN(length) || length < 0) {
-          // Invalid length prefix: reset
-          this.buffer = '';
-          this.elementEnd = -1;
-          this.startIndex = 0;
-          this.instructionStartIndex = 0;
-          this.elementBuffer = [];
+    while (true) {
+      // Step 1: If we haven't determined the element's end, locate the '.' length prefix
+      if (this.elementEnd === -1) {
+        const dotIndex = this.buffer.indexOf('.', this.startIndex);
+        if (dotIndex === -1) {
+          // Waiting for more stream data to receive the length prefix
           break;
         }
 
-        this.startIndex = lengthEnd + 1;
-        this.elementEnd = this.startIndex + length;
-      } else {
-        // Incomplete length prefix, wait for more data from TCP stream
+        const lenStr = this.buffer.substring(this.startIndex, dotIndex);
+        const len = parseInt(lenStr, 10);
+        if (isNaN(len) || len < 0) {
+          // Corrupted stream: reset state
+          this.buffer = '';
+          this.elementBuffer = [];
+          this.startIndex = 0;
+          this.elementEnd = -1;
+          break;
+        }
+
+        this.startIndex = dotIndex + 1;
+        this.elementEnd = this.startIndex + len;
+      }
+
+      // Step 2: Check if we have received the full element and its terminator
+      if (this.buffer.length <= this.elementEnd) {
+        // Waiting for more stream data to complete this element
         break;
+      }
+
+      const element = this.buffer.substring(this.startIndex, this.elementEnd);
+      const terminator = this.buffer.charAt(this.elementEnd);
+      this.elementBuffer.push(element);
+
+      if (terminator === ';') {
+        // Complete instruction received
+        const raw = this.buffer.substring(0, this.elementEnd + 1);
+        const opcode = this.elementBuffer[0];
+        const args = this.elementBuffer.slice(1);
+
+        this.onInstruction(opcode, args, raw);
+
+        // Truncate buffer immediately at instruction boundary
+        this.buffer = this.buffer.substring(this.elementEnd + 1);
+        this.startIndex = 0;
+        this.elementEnd = -1;
+        this.elementBuffer = [];
+      } else if (terminator === ',') {
+        // Move to next element within the same instruction
+        this.startIndex = this.elementEnd + 1;
+        this.elementEnd = -1;
+      } else {
+        // Stream desync or corrupt terminator: skip to next semicolon
+        const semiIndex = this.buffer.indexOf(';', this.elementEnd);
+        if (semiIndex === -1) {
+          this.buffer = '';
+          this.startIndex = 0;
+          this.elementEnd = -1;
+          this.elementBuffer = [];
+          break;
+        }
+        this.buffer = this.buffer.substring(semiIndex + 1);
+        this.startIndex = 0;
+        this.elementEnd = -1;
+        this.elementBuffer = [];
       }
     }
   }

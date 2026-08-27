@@ -41,7 +41,8 @@ monitoringRouter.get('/install.sh', (req: Request, res: Response) => {
 
   const protocol = req.headers['x-forwarded-proto'] || req.protocol;
   const host = req.headers['x-forwarded-host'] || req.get('host');
-  const hostUrl = `${protocol}://${host}`;
+  const reqHostUrl = `${protocol}://${host}`;
+  const hostUrl = MonitoringService.getEffectiveHubUrl(reqHostUrl);
 
   const script = MonitoringService.generateLinuxInstallScript(hostUrl, token);
   res.setHeader('Content-Type', 'text/x-shellscript');
@@ -59,7 +60,8 @@ monitoringRouter.get('/install.ps1', (req: Request, res: Response) => {
 
   const protocol = req.headers['x-forwarded-proto'] || req.protocol;
   const host = req.headers['x-forwarded-host'] || req.get('host');
-  const hostUrl = `${protocol}://${host}`;
+  const reqHostUrl = `${protocol}://${host}`;
+  const hostUrl = MonitoringService.getEffectiveHubUrl(reqHostUrl);
 
   const script = MonitoringService.generateWindowsInstallScript(hostUrl, token);
   res.setHeader('Content-Type', 'text/plain');

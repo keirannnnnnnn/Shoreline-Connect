@@ -1,5 +1,7 @@
 import crypto from 'crypto';
+import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
+import { config } from '../config/env.js';
 import { db } from '../db/database.js';
 import { CryptoService } from './crypto.service.js';
 import { DeviceService } from './device.service.js';
@@ -105,6 +107,78 @@ export class MonitoringService {
   }
 
   /**
+   * Auto-detect host's Tailscale IPv4 address (CGNAT 100.64.0.0/10 or tailscale interface)
+   */
+  static detectTailscaleIp(): string | null {
+    try {
+      const ifaces = os.networkInterfaces();
+      for (const [name, addrs] of Object.entries(ifaces)) {
+        if (!addrs) continue;
+        const lowerName = name.toLowerCase();
+        for (const addr of addrs) {
+          if (addr.family === 'IPv4' && !addr.internal) {
+            // 1. Interface name match (e.g. tailscale0, ts0)
+            if (lowerName.includes('tailscale') || lowerName.includes('ts0')) {
+              return addr.address;
+            }
+            // 2. CGNAT range 100.64.0.0 - 100.127.255.255
+            const parts = addr.address.split('.').map(Number);
+            if (parts.length === 4 && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) {
+              return addr.address;
+            }
+          }
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Determine the effective Hub URL for agent metrics push:
+   * Prioritizes:
+   * 1. System Setting `monitoring_hub_url` (configured in UI Settings)
+   * 2. Environment variable `MONITORING_HUB_URL`
+   * 3. Environment variable `TAILSCALE_IP`
+   * 4. Auto-detected host Tailscale IP (e.g. http://100.x.y.z:3001)
+   * 5. Request Host fallback
+   */
+  static getEffectiveHubUrl(reqHostUrl?: string): string {
+    // 1. Check system_settings
+    try {
+      const row = db.prepare("SELECT value FROM system_settings WHERE key = 'monitoring_hub_url'").get() as { value: string } | undefined;
+      if (row && row.value && row.value.trim().length > 0) {
+        return row.value.trim().replace(/\/+$/, '');
+      }
+    } catch {}
+
+    // 2. Check process.env.MONITORING_HUB_URL
+    if (process.env.MONITORING_HUB_URL && process.env.MONITORING_HUB_URL.trim().length > 0) {
+      return process.env.MONITORING_HUB_URL.trim().replace(/\/+$/, '');
+    }
+
+    // 3. Check process.env.TAILSCALE_IP
+    if (process.env.TAILSCALE_IP && process.env.TAILSCALE_IP.trim().length > 0) {
+      const tsIp = process.env.TAILSCALE_IP.trim();
+      const proto = tsIp.startsWith('http://') || tsIp.startsWith('https://') ? '' : 'http://';
+      const portSuffix = tsIp.includes(':') ? '' : `:${config.port}`;
+      return `${proto}${tsIp}${portSuffix}`.replace(/\/+$/, '');
+    }
+
+    // 4. Auto-detect host Tailscale IP
+    const detectedTsIp = this.detectTailscaleIp();
+    if (detectedTsIp) {
+      return `http://${detectedTsIp}:${config.port}`;
+    }
+
+    // 5. Fallback to request host
+    if (reqHostUrl && reqHostUrl.trim().length > 0) {
+      return reqHostUrl.trim().replace(/\/+$/, '');
+    }
+
+    return `http://127.0.0.1:${config.port}`;
+  }
+
+  /**
    * Helper: Hash bearer token with SHA-256 for fast constant-time lookup
    */
   private static hashToken(token: string): string {
@@ -160,7 +234,7 @@ export class MonitoringService {
     }
 
     const agent = (db.prepare('SELECT * FROM monitoring_agents WHERE id = ?').get(agentId) as unknown) as MonitoringAgentRecord;
-    const baseHub = (hostUrl || '').replace(/\/+$/, '');
+    const baseHub = this.getEffectiveHubUrl(hostUrl);
 
     return {
       agent,
@@ -213,7 +287,7 @@ export class MonitoringService {
       rawToken = CryptoService.decrypt<string>(JSON.parse(agent.token_encrypted));
     } catch {}
 
-    const baseHub = (hostUrl || '').replace(/\/+$/, '');
+    const baseHub = this.getEffectiveHubUrl(hostUrl);
 
     return {
       agent: {
