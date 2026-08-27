@@ -10,9 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -22,7 +20,7 @@ import (
 )
 
 func main() {
-	hubURL := flag.String("hub", "", "Shoreline Connect Hub URL (e.g. https://connect.shoreline.icu)")
+	hubURL := flag.String("hub", "", "Shoreline Connect Hub URL (e.g. http://100.99.99.176:3001)")
 	token := flag.String("token", "", "Device Monitoring Bearer Token")
 	interval := flag.Int("interval", 15, "Metrics collection interval in seconds (default 15)")
 	insecureTLS := flag.Bool("insecure", false, "Allow insecure / self-signed TLS certificates (testing only)")
@@ -31,6 +29,20 @@ func main() {
 	versionFlag := flag.Bool("version", false, "Print agent version")
 
 	flag.Parse()
+
+	// 1. If started by Windows Service Control Manager, run native service handler
+	if isWindowsService() {
+		if *hubURL == "" {
+			*hubURL = os.Getenv("SHORELINE_HUB_URL")
+		}
+		if *token == "" {
+			*token = os.Getenv("SHORELINE_AGENT_TOKEN")
+		}
+		if err := runWindowsService(*hubURL, *token, *interval, *insecureTLS); err != nil {
+			log.Fatalf("Windows Service runtime failure: %v", err)
+		}
+		return
+	}
 
 	if *versionFlag {
 		fmt.Printf("Shoreline Connect Monitoring Agent v%s (%s/%s)\n", collector.AgentVersion, runtime.GOOS, runtime.GOARCH)
@@ -47,7 +59,7 @@ func main() {
 
 	if *installFlag {
 		if *hubURL == "" || *token == "" {
-			log.Fatalf("Error: --hub and --token are required to install the service.")
+			log.Fatalf("Error: -hub and -token are required to install the service.")
 		}
 		if err := installService(*hubURL, *token, *interval, *insecureTLS); err != nil {
 			log.Fatalf("Service installation failed: %v", err)
@@ -78,10 +90,21 @@ func main() {
 	log.Printf("Target Hub: %s", cleanHubURL)
 	log.Printf("Report Interval: %d seconds", *interval)
 
-	runAgentLoop(cleanHubURL, *token, time.Duration(*interval)*time.Second, *insecureTLS)
+	// Handle graceful console shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	stopChan := make(chan struct{})
+
+	go func() {
+		<-sigChan
+		log.Println("Received termination signal. Shutting down agent.")
+		close(stopChan)
+	}()
+
+	runAgentLoop(cleanHubURL, *token, time.Duration(*interval)*time.Second, *insecureTLS, stopChan)
 }
 
-func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool) {
+func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool, stopChan <-chan struct{}) {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS},
 	}
@@ -105,17 +128,12 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Handle graceful shutdown signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
 	// Send initial baseline payload immediately
 	sendPayload(client, reportURL, token, col, sysInfo)
 
 	for {
 		select {
-		case <-sigChan:
-			log.Println("Received termination signal. Shutting down agent.")
+		case <-stopChan:
 			return
 		case <-ticker.C:
 			sendPayload(client, reportURL, token, col, sysInfo)
@@ -160,81 +178,4 @@ func sendPayload(client *http.Client, reportURL, token string, col collector.Col
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("Hub rejected metrics payload (HTTP %d): %s", resp.StatusCode, string(body))
 	}
-}
-
-func installService(hubURL, token string, interval int, insecure bool) error {
-	exePath, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	exePath, _ = filepath.Abs(exePath)
-
-	if runtime.GOOS == "linux" {
-		unitContent := fmt.Sprintf(`[Unit]
-Description=Shoreline Connect Monitoring Agent
-After=network.target network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%s -hub "%s" -token "%s" -interval %d %s
-Restart=always
-RestartSec=5s
-KillMode=process
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-`, exePath, hubURL, token, interval, boolFlag(insecure, "-insecure"))
-
-		servicePath := "/etc/systemd/system/shoreline-agent.service"
-		if err := os.WriteFile(servicePath, []byte(unitContent), 0644); err != nil {
-			return fmt.Errorf("failed to write systemd unit: %w", err)
-		}
-
-		_ = exec.Command("systemctl", "daemon-reload").Run()
-		if err := exec.Command("systemctl", "enable", "--now", "shoreline-agent").Run(); err != nil {
-			return fmt.Errorf("failed to enable and start systemd service: %w", err)
-		}
-		return nil
-	} else if runtime.GOOS == "windows" {
-		cmdStr := fmt.Sprintf(`sc.exe create ShorelineAgent binPath= "\"%s\" -hub \"%s\" -token \"%s\" -interval %d %s" start= auto DisplayName= "Shoreline Connect Monitoring Agent"`,
-			exePath, hubURL, token, interval, boolFlag(insecure, "-insecure"))
-		out, err := exec.Command("cmd.exe", "/C", cmdStr).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to create Windows service: %s (%w)", string(out), err)
-		}
-
-		_ = exec.Command("sc.exe", "failure", "ShorelineAgent", "reset= 86400", "actions= restart/5000/restart/10000/restart/60000").Run()
-		_ = exec.Command("net.exe", "start", "ShorelineAgent").Run()
-		return nil
-	}
-
-	return fmt.Errorf("service installation not supported on %s", runtime.GOOS)
-}
-
-func uninstallService() error {
-	if runtime.GOOS == "linux" {
-		_ = exec.Command("systemctl", "stop", "shoreline-agent").Run()
-		_ = exec.Command("systemctl", "disable", "shoreline-agent").Run()
-		_ = os.Remove("/etc/systemd/system/shoreline-agent.service")
-		_ = exec.Command("systemctl", "daemon-reload").Run()
-		return nil
-	} else if runtime.GOOS == "windows" {
-		_ = exec.Command("net.exe", "stop", "ShorelineAgent").Run()
-		out, err := exec.Command("sc.exe", "delete", "ShorelineAgent").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to delete Windows service: %s (%w)", string(out), err)
-		}
-		return nil
-	}
-	return fmt.Errorf("service uninstallation not supported on %s", runtime.GOOS)
-}
-
-func boolFlag(b bool, flagName string) string {
-	if b {
-		return flagName
-	}
-	return ""
 }

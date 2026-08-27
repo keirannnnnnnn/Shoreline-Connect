@@ -3,6 +3,7 @@ FROM golang:1.24-alpine AS agent-builder
 WORKDIR /build
 COPY agent/ ./
 RUN mkdir -p /binaries && \
+    go mod tidy && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-linux-amd64 . && \
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-linux-arm64 . && \
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-windows-amd64.exe .

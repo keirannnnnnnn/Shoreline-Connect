@@ -719,12 +719,30 @@ Write-Host "-> Downloading Shoreline agent binary from $DownloadUrl..." -Foregro
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $ExePath -UseBasicParsing
 
 Write-Host "-> Registering and starting Windows service..." -ForegroundColor Yellow
-& "$ExePath" -install -hub "$HubUrl" -token "$Token"
+$proc = Start-Process -FilePath $ExePath -ArgumentList "-install", "-hub", "$HubUrl", "-token", "$Token" -Wait -PassThru -NoNewWindow
 
-Write-Host ""
-Write-Host "==================================================" -ForegroundColor Green
-Write-Host "✅ Shoreline Monitoring Agent successfully started!" -ForegroundColor Green
-Write-Host "==================================================" -ForegroundColor Green
+if ($proc.ExitCode -ne 0) {
+    Write-Host ""
+    Write-Host "==================================================" -ForegroundColor Red
+    Write-Host "❌ Failed to install Shoreline Monitoring Agent service (Exit Code: $($proc.ExitCode))." -ForegroundColor Red
+    Write-Host "==================================================" -ForegroundColor Red
+    exit $proc.ExitCode
+}
+
+Start-Sleep -Seconds 2
+$svc = Get-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
+
+if ($svc -and $svc.Status -eq "Running") {
+    Write-Host ""
+    Write-Host "==================================================" -ForegroundColor Green
+    Write-Host "✅ Shoreline Monitoring Agent service is running!" -ForegroundColor Green
+    Write-Host "==================================================" -ForegroundColor Green
+} else {
+    Write-Host ""
+    Write-Host "==================================================" -ForegroundColor Yellow
+    Write-Host "⚠️ Service registered. Current status: $($svc.Status)" -ForegroundColor Yellow
+    Write-Host "==================================================" -ForegroundColor Yellow
+}
 `;
   }
 }
