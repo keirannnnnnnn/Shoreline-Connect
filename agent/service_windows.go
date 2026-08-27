@@ -6,12 +6,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
 type shorelineWindowsService struct {
@@ -70,69 +69,75 @@ func installService(hubURL, token string, interval int, insecure bool) error {
 	}
 	exePath, _ = filepath.Abs(exePath)
 
-	insecFlag := ""
-	if insecure {
-		insecFlag = " -insecure"
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("failed to connect to Windows Service Control Manager: %w", err)
 	}
+	defer m.Disconnect()
 
-	// 1. Remove any previous service instance
-	_ = exec.Command("sc.exe", "stop", "ShorelineAgent").Run()
-	_ = exec.Command("sc.exe", "delete", "ShorelineAgent").Run()
-	time.Sleep(1 * time.Second)
-
-	// 2. Format binPath argument with proper quoting
-	// sc.exe syntax requires a space after key= e.g. binPath= "\"C:\path\exe\" -hub ..."
-	binPathArg := fmt.Sprintf(`"%s" -hub "%s" -token "%s" -interval %d%s`, exePath, hubURL, token, interval, insecFlag)
-
-	createOut, createErr := exec.Command(
-		"sc.exe",
-		"create",
-		"ShorelineAgent",
-		"binPath= "+binPathArg,
-		"start= auto",
-		"DisplayName= Shoreline Connect Monitoring Agent",
-	).CombinedOutput()
-
-	if createErr != nil {
-		// If service is marked for deletion by SCM, wait briefly and retry once
-		time.Sleep(2 * time.Second)
-		createOut, createErr = exec.Command(
-			"sc.exe",
-			"create",
-			"ShorelineAgent",
-			"binPath= "+binPathArg,
-			"start= auto",
-			"DisplayName= Shoreline Connect Monitoring Agent",
-		).CombinedOutput()
-
-		if createErr != nil {
-			return fmt.Errorf("failed to create Windows service: %s (%w)", string(createOut), createErr)
-		}
-	}
-
-	// 3. Configure recovery on failure & description
-	_ = exec.Command("sc.exe", "failure", "ShorelineAgent", "reset= 86400", "actions= restart/5000/restart/10000/restart/60000").Run()
-	_ = exec.Command("sc.exe", "description", "ShorelineAgent", "Shoreline Connect server resource telemetry and monitoring agent").Run()
-
-	// 4. Start the service
-	startOut, startErr := exec.Command("sc.exe", "start", "ShorelineAgent").CombinedOutput()
-	if startErr != nil {
-		// Check if it's already started or pending start
+	// If service exists, stop and delete it first
+	s, err := m.OpenService("ShorelineAgent")
+	if err == nil {
+		_, _ = s.Control(svc.Stop)
+		_ = s.Delete()
+		_ = s.Close()
 		time.Sleep(1 * time.Second)
-		queryOut, _ := exec.Command("sc.exe", "query", "ShorelineAgent").CombinedOutput()
-		if !strings.Contains(string(queryOut), "RUNNING") && !strings.Contains(string(queryOut), "START_PENDING") {
-			return fmt.Errorf("failed to start Windows service: %s (%w)", string(startOut), startErr)
-		}
+	}
+
+	cfg := mgr.Config{
+		DisplayName:      "Shoreline Connect Monitoring Agent",
+		Description:      "Shoreline Connect server resource telemetry and monitoring agent",
+		StartType:        mgr.StartAutomatic,
+		ServiceStartName: "LocalSystem",
+	}
+
+	args := []string{
+		"-hub", hubURL,
+		"-token", token,
+		"-interval", fmt.Sprintf("%d", interval),
+	}
+	if insecure {
+		args = append(args, "-insecure")
+	}
+
+	s, err = m.CreateService("ShorelineAgent", exePath, cfg, args...)
+	if err != nil {
+		return fmt.Errorf("failed to create Windows service: %w", err)
+	}
+	defer s.Close()
+
+	// Configure recovery action on failure: restart service after 5s, 10s, 60s
+	recoveryActions := []mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+	}
+	_ = s.SetRecoveryActions(recoveryActions, 86400)
+
+	// Start the service
+	if err := s.Start(); err != nil {
+		return fmt.Errorf("failed to start Windows service: %w", err)
 	}
 
 	return nil
 }
 
 func uninstallService() error {
-	_ = exec.Command("sc.exe", "stop", "ShorelineAgent").Run()
-	out, err := exec.Command("sc.exe", "delete", "ShorelineAgent").CombinedOutput()
+	m, err := mgr.Connect()
 	if err != nil {
-		return fmt.Errorf("failed to delete Windows service: %s (%w)", string(out), err)
+		return fmt.Errorf("failed to connect to Windows Service Control Manager: %w", err)
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService("ShorelineAgent")
+	if err != nil {
+		return fmt.Errorf("service is not installed: %w", err)
+	}
+	defer s.Close()
+
+	_, _ = s.Control(svc.Stop)
+	if err := s.Delete(); err != nil {
+		return fmt.Errorf("failed to delete service: %w", err)
 	}
 	return nil
 }
