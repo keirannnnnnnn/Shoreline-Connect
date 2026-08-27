@@ -698,7 +698,7 @@ echo "=================================================="
    * Generate Windows PowerShell installation script on the fly
    */
   static generateWindowsInstallScript(hostUrl: string, token: string): string {
-    return `$ErrorActionPreference = "Stop"
+    return `$ErrorActionPreference = "Continue"
 
 $HubUrl = "${hostUrl}"
 $Token = "${token}"
@@ -709,33 +709,46 @@ Write-Host "==================================================" -ForegroundColor
 
 $InstallDir = "C:\\Program Files\\ShorelineAgent"
 if (-not (Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    try {
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    } catch {
+        Write-Host "❌ Failed to create install directory: $_" -ForegroundColor Red
+        return
+    }
 }
 
 $ExePath = Join-Path $InstallDir "shoreline-agent.exe"
 $DownloadUrl = "$HubUrl/api/monitoring/agent/download/windows/amd64"
 
 Write-Host "-> Downloading Shoreline agent binary from $DownloadUrl..." -ForegroundColor Yellow
-Invoke-WebRequest -Uri $DownloadUrl -OutFile $ExePath -UseBasicParsing
+try {
+    # Stop existing service if running so binary can be overwritten cleanly
+    Stop-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $ExePath -UseBasicParsing
+} catch {
+    Write-Host "❌ Failed to download agent binary: $_" -ForegroundColor Red
+    return
+}
 
 Write-Host "-> Registering and starting Windows service..." -ForegroundColor Yellow
-$proc = Start-Process -FilePath $ExePath -ArgumentList "-install", "-hub", "$HubUrl", "-token", "$Token" -Wait -PassThru -NoNewWindow
+& "$ExePath" -install -hub "$HubUrl" -token "$Token"
+$exitCode = $LASTEXITCODE
 
-if ($proc.ExitCode -ne 0) {
+if ($exitCode -ne 0) {
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Red
-    Write-Host "❌ Failed to install Shoreline Monitoring Agent service (Exit Code: $($proc.ExitCode))." -ForegroundColor Red
+    Write-Host "❌ Installation failed with exit code: $exitCode. See details above." -ForegroundColor Red
     Write-Host "==================================================" -ForegroundColor Red
-    exit $proc.ExitCode
+    return
 }
 
 Start-Sleep -Seconds 2
 $svc = Get-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
 
-if ($svc -and $svc.Status -eq "Running") {
+if ($svc -and ($svc.Status -eq "Running" -or $svc.Status -eq "StartPending")) {
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "✅ Shoreline Monitoring Agent service is running!" -ForegroundColor Green
+    Write-Host "✅ Shoreline Monitoring Agent service is active and running!" -ForegroundColor Green
     Write-Host "==================================================" -ForegroundColor Green
 } else {
     Write-Host ""
