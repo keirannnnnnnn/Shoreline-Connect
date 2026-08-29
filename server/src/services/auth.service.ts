@@ -99,13 +99,22 @@ export class AuthService {
       .map(s => s.trim().toLowerCase())
       .filter(Boolean);
 
+    const checkGroupMatch = (userGroupStr: string, targetGroupName: string) => {
+      const ug = userGroupStr.toLowerCase().trim();
+      const target = targetGroupName.toLowerCase().trim();
+      if (ug === target) return true;
+      if (ug === `cn=${target}`) return true;
+      if (ug.startsWith(`cn=${target},`)) return true;
+      return false;
+    };
+
     const isAdminMember = userGroups.some(g => 
-      adminGroups.includes(g) || adminGroups.some(ag => g.includes(`cn=${ag},`))
+      adminGroups.some(ag => checkGroupMatch(g, ag))
     );
 
     const isUserMember = userGroups.some(g => 
-      userGroupsAllowed.includes(g) || userGroupsAllowed.some(ug => g.includes(`cn=${ug},`))
-    ) || isAdminMember;
+      userGroupsAllowed.some(ug => checkGroupMatch(g, ug))
+    );
 
     let role: 'admin' | 'user';
 
@@ -116,6 +125,8 @@ export class AuthService {
     } else {
       throw new Error(`Access denied. Account '${authenticatedUser.sAMAccountName}' is not a member of authorized AD groups (${adminGroups.join(', ')} or ${userGroupsAllowed.join(', ')}).`);
     }
+
+    console.log(`[AuthService] User '${authenticatedUser.sAMAccountName}' resolved: isAdmin=${isAdminMember}, isUser=${isUserMember} -> role='${role}' (AD groups: [${authenticatedUser.groups.join(', ')}])`);
 
     // Upsert user in local SQLite database
     let user = (db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(authenticatedUser.sAMAccountName) as unknown) as UserRecord | undefined;

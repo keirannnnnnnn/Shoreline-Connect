@@ -149,6 +149,21 @@ export const Settings: React.FC = () => {
     }
   };
 
+  // Admin: Update user role
+  const handleUpdateUserRole = async (userId: string, newRole: 'admin' | 'user') => {
+    try {
+      await api.admin.updateUserRole(userId, newRole);
+      setAllUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u))
+      );
+      if (selectedUserForDevices && selectedUserForDevices.id === userId) {
+        setSelectedUserForDevices({ ...selectedUserForDevices, role: newRole });
+      }
+    } catch (err: any) {
+      alert(`Failed to update user role: ${err.message}`);
+    }
+  };
+
   // Admin: Check update
   const handleCheckUpdate = async () => {
     setLoading(true);
@@ -645,15 +660,29 @@ export const Settings: React.FC = () => {
                           <p className="text-[10px] text-slate-400 font-mono truncate">{u.username}@shoreline.icu</p>
                         </div>
                       </div>
-                      <div className="flex items-center justify-between pt-2 border-t border-surface-border text-[10px]">
-                        <span className={`px-1.5 py-0.5 rounded font-semibold ${
-                          u.role === 'admin' ? 'bg-purple-500/20 text-purple-300' : 'bg-blue-500/20 text-blue-300'
-                        }`}>
-                          {u.role === 'admin' ? 'Administrator' : 'Standard User'}
-                        </span>
-                        <span className="text-purple-400 flex items-center gap-1 font-semibold">
+                      <div
+                        className="flex items-center justify-between pt-2 border-t border-surface-border text-[10px]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <select
+                          value={u.role}
+                          onChange={(e) => handleUpdateUserRole(u.id, e.target.value as 'admin' | 'user')}
+                          className={`px-2 py-0.5 rounded font-semibold text-[10px] bg-surface-active border focus:outline-none cursor-pointer transition-colors ${
+                            u.role === 'admin'
+                              ? 'border-purple-500/40 text-purple-300'
+                              : 'border-blue-500/40 text-blue-300'
+                          }`}
+                        >
+                          <option value="user" className="bg-surface text-slate-200">Standard User</option>
+                          <option value="admin" className="bg-surface text-purple-300">Administrator</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectUser(u)}
+                          className="text-purple-400 hover:text-purple-300 flex items-center gap-1 font-semibold"
+                        >
                           View Devices <SymbolIcon name="chevron.right" className="w-2.5 h-2.5" />
-                        </span>
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -664,12 +693,26 @@ export const Settings: React.FC = () => {
                   <div className="mt-8 p-6 rounded-3xl bg-surface/60 border border-purple-500/30 space-y-5 animate-in fade-in">
                     <div className="flex items-center justify-between">
                       <div>
-                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                          <SymbolIcon name="person.crop.circle" className="w-4 h-4 text-purple-400" />
-                          <span>Devices provisioned for {selectedUserForDevices.display_name}</span>
-                        </h3>
-                        <p className="text-xs text-slate-400">
-                          Manage devices created on behalf of this user.
+                        <div className="flex items-center gap-3">
+                          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                            <SymbolIcon name="person.crop.circle" className="w-4 h-4 text-purple-400" />
+                            <span>{selectedUserForDevices.display_name}</span>
+                          </h3>
+                          <select
+                            value={selectedUserForDevices.role}
+                            onChange={(e) => handleUpdateUserRole(selectedUserForDevices.id, e.target.value as 'admin' | 'user')}
+                            className={`px-2 py-0.5 rounded-lg font-semibold text-xs bg-surface border focus:outline-none cursor-pointer ${
+                              selectedUserForDevices.role === 'admin'
+                                ? 'border-purple-500 text-purple-300'
+                                : 'border-blue-500 text-blue-300'
+                            }`}
+                          >
+                            <option value="user" className="bg-surface text-slate-200">Standard User</option>
+                            <option value="admin" className="bg-surface text-purple-300">Administrator</option>
+                          </select>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Manage devices created on behalf of this user ({selectedUserForDevices.username}@shoreline.icu).
                         </p>
                       </div>
 
