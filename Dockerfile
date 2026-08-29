@@ -28,8 +28,8 @@ RUN npm run build
 FROM node:24-alpine AS runner
 WORKDIR /app
 
-# Install sqlite CLI tool for inspection/debugging (Alpine package name is 'sqlite')
-RUN apk add --no-cache sqlite
+# Install sqlite CLI and git/curl/tar for self-updating
+RUN apk add --no-cache sqlite git curl tar
 
 ENV NODE_ENV=production
 ENV PORT=3001
