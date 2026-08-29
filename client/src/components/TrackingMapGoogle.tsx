@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import { TrackedItem, JourneyPoint } from '../types/index.js';
 import { SymbolIcon } from './SymbolIcon.js';
 
@@ -72,7 +72,6 @@ export const TrackingMapGoogle: React.FC<TrackingMapGoogleProps> = ({
   useEffect(() => {
     if (!isLoaded || !mapContainerRef.current || mapInstanceRef.current || !window.google?.maps) return;
 
-    // Dark Map Style JSON
     const darkStyle = [
       { elementType: 'geometry', stylers: [{ color: '#181b26' }] },
       { elementType: 'labels.text.stroke', stylers: [{ color: '#181b26' }] },
@@ -103,7 +102,6 @@ export const TrackingMapGoogle: React.FC<TrackingMapGoogleProps> = ({
     if (!isLoaded || !mapInstanceRef.current || !window.google?.maps) return;
     const map = mapInstanceRef.current;
 
-    // Clear previous markers
     markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
 
@@ -128,7 +126,7 @@ export const TrackingMapGoogle: React.FC<TrackingMapGoogleProps> = ({
         map,
         title: item.name,
         label: {
-          text: isVehicle ? '??' : '??',
+          text: isVehicle ? '🚗' : '📱',
           fontSize: '18px',
         },
         icon: {
@@ -217,7 +215,7 @@ export const TrackingMapGoogle: React.FC<TrackingMapGoogleProps> = ({
         position: pos,
         map,
         label: {
-          text: selectedItem?.category === 'Devices' ? '??' : '??',
+          text: selectedItem?.category === 'Devices' ? '📱' : '🚗',
           fontSize: '20px',
         },
         icon: {

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+﻿import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { TrackedItem, JourneyPoint } from '../types/index.js';
 
@@ -81,7 +81,7 @@ export const TrackingMapLeaflet: React.FC<TrackingMapLeafletProps> = ({
               ? 'bg-emerald-600 border-emerald-300 text-white shadow-emerald-900/50 animate-pulse'
               : 'bg-slate-800 border-slate-600 text-slate-300 shadow-black/60'
           }">
-            <span class="text-xs font-bold">${isVehicle ? '??' : '??'}</span>
+            <span class="text-xs font-bold">${isVehicle ? '🚗' : '📱'}</span>
           </div>
           ${
             item.last_heading !== null && isMoving
@@ -107,7 +107,7 @@ export const TrackingMapLeaflet: React.FC<TrackingMapLeafletProps> = ({
       marker.bindTooltip(
         `<div class="font-sans text-xs">
           <div class="font-bold text-slate-100">${item.name}</div>
-          <div class="text-slate-400 capitalize">${item.status} ${item.last_speed ? `� ${Math.round(item.last_speed)} km/h` : ''}</div>
+          <div class="text-slate-400 capitalize">${item.status} ${item.last_speed ? `• ${Math.round(item.last_speed)} km/h` : ''}</div>
         </div>`,
         { direction: 'top', offset: [0, -20], className: 'custom-leaflet-tooltip' }
       );
@@ -197,14 +197,14 @@ export const TrackingMapLeaflet: React.FC<TrackingMapLeafletProps> = ({
       return;
     }
 
-    const { latitude, longitude, heading, speed, speed_limit, is_speeding } = playbackCurrentPoint;
+    const { latitude, longitude, heading, is_speeding } = playbackCurrentPoint;
 
     const vehicleIconHtml = `
       <div class="relative flex items-center justify-center transform -translate-x-1/2 -translate-y-1/2">
         <div class="w-12 h-12 rounded-2xl bg-brand-600 border-2 border-white shadow-2xl flex items-center justify-center text-white ring-4 ${
           is_speeding ? 'ring-red-500/50 bg-red-600' : 'ring-brand-500/40'
         } transition-all">
-          <span class="text-base font-bold">${selectedItem?.category === 'Devices' ? '??' : '??'}</span>
+          <span class="text-base font-bold">${selectedItem?.category === 'Devices' ? '📱' : '🚗'}</span>
         </div>
         ${
           heading !== null
