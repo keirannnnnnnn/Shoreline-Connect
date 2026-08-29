@@ -200,6 +200,103 @@ export function initDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    /* --- Build 2: Tracking Subsystem Schema --- */
+    CREATE TABLE IF NOT EXISTS tracked_items (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL CHECK (category IN ('Vehicles', 'Devices')),
+      user_id TEXT NOT NULL,
+      token_hash TEXT UNIQUE NOT NULL,
+      movement_threshold_meters REAL DEFAULT 25.0,
+      min_speed_kmh REAL DEFAULT 5.0,
+      stationary_dwell_seconds INTEGER DEFAULT 300,
+      last_lat REAL,
+      last_lng REAL,
+      last_speed REAL,
+      last_heading REAL,
+      last_accuracy REAL,
+      last_battery REAL,
+      status TEXT DEFAULT 'offline' CHECK (status IN ('moving', 'stationary', 'offline')),
+      last_seen_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tracked_items_user ON tracked_items(user_id);
+    CREATE INDEX IF NOT EXISTS idx_tracked_items_token ON tracked_items(token_hash);
+
+    CREATE TABLE IF NOT EXISTS tracking_journeys (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      start_time INTEGER NOT NULL,
+      end_time INTEGER,
+      start_lat REAL,
+      start_lng REAL,
+      end_lat REAL,
+      end_lng REAL,
+      distance_km REAL DEFAULT 0.0,
+      duration_seconds INTEGER DEFAULT 0,
+      avg_speed_kmh REAL DEFAULT 0.0,
+      max_speed_kmh REAL DEFAULT 0.0,
+      points_count INTEGER DEFAULT 0,
+      has_speeding INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'completed')),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES tracked_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_journeys_item_time ON tracking_journeys(item_id, start_time DESC);
+
+    CREATE TABLE IF NOT EXISTS tracking_locations_raw (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      speed REAL,
+      heading REAL,
+      accuracy REAL,
+      battery_level REAL,
+      speed_limit REAL,
+      road_name TEXT,
+      is_speeding INTEGER DEFAULT 0,
+      timestamp INTEGER NOT NULL,
+      journey_id TEXT,
+      FOREIGN KEY (item_id) REFERENCES tracked_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (journey_id) REFERENCES tracking_journeys(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_loc_raw_item_time ON tracking_locations_raw(item_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_loc_raw_journey ON tracking_locations_raw(journey_id);
+
+    CREATE TABLE IF NOT EXISTS tracking_locations_downsampled (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      speed REAL,
+      heading REAL,
+      speed_limit REAL,
+      is_speeding INTEGER DEFAULT 0,
+      timestamp INTEGER NOT NULL,
+      journey_id TEXT,
+      FOREIGN KEY (item_id) REFERENCES tracked_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (journey_id) REFERENCES tracking_journeys(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_loc_down_item_time ON tracking_locations_downsampled(item_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS osm_speed_limits_cache (
+      id TEXT PRIMARY KEY,
+      lat_grid REAL NOT NULL,
+      lng_grid REAL NOT NULL,
+      speed_limit_kmh REAL NOT NULL,
+      road_name TEXT,
+      cached_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_osm_speed_grid ON osm_speed_limits_cache(lat_grid, lng_grid);
   `);
 
   // Initialize default settings if not exists
@@ -216,6 +313,8 @@ export function initDatabase() {
   insertSetting.run('git_repo_url', config.git.repoUrl);
   insertSetting.run('git_branch', config.git.branch);
   insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');
+  insertSetting.run('tracking_map_provider', 'leaflet');
+  insertSetting.run('google_maps_api_key', '');
 
   console.log('✅ SQLite Database initialized at:', dbPath);
 }

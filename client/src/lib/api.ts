@@ -1,4 +1,4 @@
-import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus } from '../types/index.js';
+import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings } from '../types/index.js';
 
 const API_BASE = '/api';
 
@@ -180,8 +180,43 @@ export const api = {
   },
 
   tracking: {
-    getStatus: () => fetchJson<{ enabled: boolean; feature: string; scaffold: boolean; message: string }>('/tracking/status'),
-    getDevices: () => fetchJson<{ devices: any[]; message: string }>('/tracking/devices'),
+    getItems: () => fetchJson<{ items: TrackedItem[] }>('/tracking/items'),
+    getItem: (id: string) => fetchJson<{ item: TrackedItem }>('/tracking/items/' + id),
+    createItem: (data: {
+      name: string;
+      category: 'Vehicles' | 'Devices';
+      movement_threshold_meters?: number;
+      min_speed_kmh?: number;
+      stationary_dwell_seconds?: number;
+    }) =>
+      fetchJson<{ item: TrackedItem; rawToken: string; ingestUrl: string; sampleCurl: string }>('/tracking/items', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    updateItem: (id: string, data: Partial<TrackedItem>) =>
+      fetchJson<{ item: TrackedItem }>('/tracking/items/' + id, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    deleteItem: (id: string) =>
+      fetchJson<{ success: boolean; message: string }>('/tracking/items/' + id, {
+        method: 'DELETE',
+      }),
+    regenerateToken: (id: string) =>
+      fetchJson<{ rawToken: string }>('/tracking/items/' + id + '/regenerate-token', {
+        method: 'POST',
+      }),
+    getJourneys: (itemId: string) =>
+      fetchJson<{ journeys: TrackingJourney[] }>('/tracking/items/' + itemId + '/journeys'),
+    getJourneyPoints: (journeyId: string) =>
+      fetchJson<{ points: JourneyPoint[] }>('/tracking/journeys/' + journeyId + '/points'),
+    getSettings: () =>
+      fetchJson<TrackingSettings>('/tracking/settings'),
+    saveSettings: (settings: { mapProvider?: 'leaflet' | 'google'; googleMapsApiKey?: string }) =>
+      fetchJson<{ success: boolean; message: string }>('/tracking/settings', {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      }),
   },
 
   cloud: {

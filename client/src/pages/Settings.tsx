@@ -38,6 +38,14 @@ export const Settings: React.FC = () => {
   });
   const [adSaveStatus, setAdSaveStatus] = useState<string | null>(null);
 
+  // Track & Map Provider Settings
+  const [trackSettings, setTrackSettings] = useState<{ mapProvider: 'leaflet' | 'google'; googleMapsApiKey: string }>({
+    mapProvider: 'leaflet',
+    googleMapsApiKey: '',
+  });
+  const [trackSaveStatus, setTrackSaveStatus] = useState<string | null>(null);
+  const [isSavingTrack, setIsSavingTrack] = useState<boolean>(false);
+
   // Backup & Import
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<any | null>(null);
@@ -77,16 +85,37 @@ export const Settings: React.FC = () => {
 
   const loadGeneralData = async () => {
     try {
-      const [foldersRes, guestRes, devicesRes] = await Promise.all([
+      const [foldersRes, guestRes, devicesRes, trackRes] = await Promise.all([
         api.folders.getAll(),
         api.shares.getMyGuestShares(),
         api.devices.getAll(),
+        api.tracking.getSettings().catch(() => ({ mapProvider: 'leaflet' as const, googleMapsApiKey: '', hasGoogleMapsKey: false })),
       ]);
       setFolders(foldersRes.folders);
       setGuestShares(guestRes.guestShares);
       setUserDevices(devicesRes.devices);
+      if (trackRes) {
+        setTrackSettings({
+          mapProvider: trackRes.mapProvider,
+          googleMapsApiKey: trackRes.googleMapsApiKey,
+        });
+      }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleSaveTrackSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingTrack(true);
+    setTrackSaveStatus(null);
+    try {
+      await api.tracking.saveSettings(trackSettings);
+      setTrackSaveStatus('Tracking and Map settings saved successfully.');
+    } catch (err: any) {
+      setTrackSaveStatus(`Error saving settings: ${err.message}`);
+    } finally {
+      setIsSavingTrack(false);
     }
   };
 
@@ -353,6 +382,18 @@ export const Settings: React.FC = () => {
             >
               <SymbolIcon name="archivebox.fill" className="w-4 h-4 text-amber-400" />
               <span>Backup & Restore</span>
+            </button>
+
+            <button
+              onClick={() => handleTabChange('track')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                activeTab === 'track'
+                  ? 'bg-surface-active text-white border border-surface-borderLight shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+              }`}
+            >
+              <SymbolIcon name="location.fill" className="w-4 h-4 text-brand-400" />
+              <span>Track</span>
             </button>
 
             {/* Admin Section */}
@@ -676,6 +717,162 @@ export const Settings: React.FC = () => {
                         </>
                       )}
                     </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TRACK SETTINGS TAB */}
+            {activeTab === 'track' && (
+              <div className="space-y-6">
+                {/* Map Provider & API Key Configuration */}
+                <div className="rounded-3xl bg-surface-card border border-surface-border p-6 space-y-6">
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <SymbolIcon name="location.fill" className="w-5 h-5 text-brand-400" />
+                      <span>Tracking & Map Engine Preferences</span>
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      Configure your preferred map tile provider for the Tracking tab and set up API credentials.
+                    </p>
+                  </div>
+
+                  {trackSaveStatus && (
+                    <div className="p-3.5 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-300 text-xs">
+                      {trackSaveStatus}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSaveTrackSettings} className="space-y-5">
+                    {/* Map Provider Selection */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-2">
+                        Map Tile Provider
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label
+                          className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
+                            trackSettings.mapProvider === 'leaflet'
+                              ? 'bg-brand-500/10 border-brand-500/50 shadow-md ring-1 ring-brand-500/30'
+                              : 'bg-surface border-surface-border hover:bg-surface-hover'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="mapProvider"
+                            value="leaflet"
+                            checked={trackSettings.mapProvider === 'leaflet'}
+                            onChange={() => setTrackSettings({ ...trackSettings, mapProvider: 'leaflet' })}
+                            className="mt-0.5 accent-brand-500"
+                          />
+                          <div>
+                            <div className="font-bold text-xs text-white flex items-center gap-1.5">
+                              <span>Leaflet (Default)</span>
+                              <span className="px-1.5 py-0.2 rounded text-[10px] bg-brand-500/20 text-brand-300 border border-brand-500/30 font-normal">
+                                Recommended
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                              Dark Matter & OpenStreetMap tiles. Fast, high performance, fully functional without requiring an external API key.
+                            </p>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
+                            trackSettings.mapProvider === 'google'
+                              ? 'bg-brand-500/10 border-brand-500/50 shadow-md ring-1 ring-brand-500/30'
+                              : 'bg-surface border-surface-border hover:bg-surface-hover'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="mapProvider"
+                            value="google"
+                            checked={trackSettings.mapProvider === 'google'}
+                            onChange={() => setTrackSettings({ ...trackSettings, mapProvider: 'google' })}
+                            className="mt-0.5 accent-brand-500"
+                          />
+                          <div>
+                            <div className="font-bold text-xs text-white">Google Maps</div>
+                            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                              Official Google Maps JavaScript API with customized dark styling and satellite support. Requires a Google Maps API Key below.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Google Maps API Key */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                        Google Maps API Key
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="AIzaSy..."
+                        value={trackSettings.googleMapsApiKey}
+                        onChange={(e) => setTrackSettings({ ...trackSettings, googleMapsApiKey: e.target.value })}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-sm font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none placeholder:text-slate-600"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Needed only when Google Maps is selected. Road speed limits will continue to query OpenStreetMap's Overpass engine regardless of provider.
+                      </p>
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="submit"
+                        disabled={isSavingTrack}
+                        className="py-2.5 px-5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-semibold shadow-glow shadow-brand-500/20 transition-all flex items-center gap-2"
+                      >
+                        <SymbolIcon name="checkmark.circle.fill" className="w-4 h-4" />
+                        <span>{isSavingTrack ? 'Saving...' : 'Save Tracking Preferences'}</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* API & INGESTION SECTION */}
+                <div className="rounded-3xl bg-surface-card border border-surface-border p-6 space-y-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <SymbolIcon name="bolt.fill" className="w-4 h-4 text-emerald-400" />
+                      <span>Tracking Telemetry Ingestion API</span>
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Overview of the HTTP endpoint and payload structure for telemetry reporting clients and mobile companion apps.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 text-xs">
+                    <div className="p-3 bg-surface rounded-xl border border-surface-border">
+                      <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider mb-1">Ingestion Endpoint</div>
+                      <div className="font-mono text-xs text-emerald-400 font-semibold">POST /api/tracking/report</div>
+                    </div>
+
+                    <div className="p-3 bg-surface rounded-xl border border-surface-border space-y-2">
+                      <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider">Authentication</div>
+                      <p className="text-slate-300 text-xs">
+                        Every vehicle and device has a dedicated bearer token generated at creation time. Include it in the HTTP <code className="text-amber-300 font-mono">Authorization: Bearer sh_trk_...</code> header.
+                      </p>
+                    </div>
+
+                    <div className="p-3 bg-surface rounded-xl border border-surface-border space-y-2">
+                      <div className="text-[11px] text-slate-400 uppercase font-bold tracking-wider">JSON Payload Specification</div>
+                      <pre className="p-3 bg-black/50 border border-slate-800 rounded-lg font-mono text-[11px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
+{`{
+  "latitude": 51.5074,         // required (number, -90 to 90)
+  "longitude": -0.1278,        // required (number, -180 to 180)
+  "speed": 45.0,               // optional (number)
+  "speed_unit": "kmh",         // optional ("kmh" | "mph" | "ms", default: "kmh")
+  "heading": 180,              // optional (number 0-360 degrees)
+  "accuracy": 4.5,             // optional (GPS accuracy radius in meters)
+  "battery_level": 88,         // optional (percentage 0-100)
+  "timestamp": 1724965200      // optional (unix seconds or ISO 8601 string)
+}`}
+                      </pre>
+                    </div>
                   </div>
                 </div>
               </div>

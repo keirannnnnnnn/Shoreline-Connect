@@ -171,3 +171,62 @@ export interface BackupSummary {
   settingsRestored: number;
   dashboardLayoutRestored: boolean;
 }
+
+export interface TrackedItem {
+  id: string;
+  name: string;
+  category: 'Vehicles' | 'Devices';
+  user_id: string;
+  movement_threshold_meters: number;
+  min_speed_kmh: number;
+  stationary_dwell_seconds: number;
+  last_lat: number | null;
+  last_lng: number | null;
+  last_speed: number | null;
+  last_heading: number | null;
+  last_accuracy: number | null;
+  last_battery: number | null;
+  status: 'moving' | 'stationary' | 'offline';
+  last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrackingJourney {
+  id: string;
+  item_id: string;
+  start_time: number;
+  end_time: number | null;
+  start_lat: number | null;
+  start_lng: number | null;
+  end_lat: number | null;
+  end_lng: number | null;
+  distance_km: number;
+  duration_seconds: number;
+  avg_speed_kmh: number;
+  max_speed_kmh: number;
+  points_count: number;
+  has_speeding: number;
+  status: 'in_progress' | 'completed';
+  created_at: string;
+}
+
+export interface JourneyPoint {
+  id: string;
+  latitude: number;
+  longitude: number;
+  speed: number | null;
+  heading: number | null;
+  accuracy: number | null;
+  battery_level: number | null;
+  speed_limit: number | null;
+  road_name: string | null;
+  is_speeding: number;
+  timestamp: number;
+}
+
+export interface TrackingSettings {
+  mapProvider: 'leaflet' | 'google';
+  googleMapsApiKey: string;
+  hasGoogleMapsKey: boolean;
+}

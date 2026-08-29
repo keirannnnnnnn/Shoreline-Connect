@@ -7,6 +7,7 @@ import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { GuacdService } from './services/guacd.service.js';
 import { MonitoringService } from './services/monitoring.service.js';
+import { TrackingService } from './services/tracking.service.js';
 
 async function runTests() {
   console.log('🧪 Starting Shoreline Connect Automated Backend Tests...\n');
@@ -369,10 +370,76 @@ async function runTests() {
   assert(restoredDevice && restoredDevice.name === 'Restored Server', 'Device must be restored');
   console.log('  ✅ Data backup export and restore verification passed.\n');
 
+  // 13. Test Build 2: Tracking Subsystem
+  console.log('▶ Test 13: Build 2 Location Tracking & Journey Engine');
+  const { item: testVehicle, rawToken: vehicleToken } = TrackingService.createItem(userId, {
+    name: 'Company Transit Van',
+    category: 'Vehicles',
+    movement_threshold_meters: 10,
+    min_speed_kmh: 5.0,
+    stationary_dwell_seconds: 2,
+  });
+
+  assert(testVehicle && testVehicle.id, 'Must create tracked item');
+  assert.strictEqual(testVehicle.category, 'Vehicles', 'Category must be Vehicles');
+  assert(vehicleToken.startsWith('sh_trk_'), 'Token must be prefixed with sh_trk_');
+
+  // Auth token check
+  const authenticatedItem = TrackingService.authenticateToken(vehicleToken);
+  assert(authenticatedItem && authenticatedItem.id === testVehicle.id, 'Bearer token must authenticate item');
+
+  // Location Ingestion - Start moving
+  const t0 = Math.floor(Date.now() / 1000);
+  const p1 = await TrackingService.recordLocation(authenticatedItem, {
+    latitude: 51.5007,
+    longitude: -0.1246,
+    speed: 30.0,
+    heading: 90,
+    accuracy: 5.0,
+    battery_level: 95,
+    timestamp: t0,
+  });
+  assert(p1.success, 'Point 1 ingestion must succeed');
+  assert(p1.journeyId, 'Moving point must create a journey');
+
+  // Location Ingestion - Move further along path
+  const updatedItem = TrackingService.getItem(testVehicle.id, userId)!;
+  const p2 = await TrackingService.recordLocation(updatedItem, {
+    latitude: 51.5033,
+    longitude: -0.1195,
+    speed: 45.0,
+    heading: 85,
+    accuracy: 4.0,
+    battery_level: 94,
+    timestamp: t0 + 30,
+  });
+  assert(p2.success, 'Point 2 ingestion must succeed');
+
+  // Verify Journey calculation
+  const journeys = TrackingService.getItemJourneys(testVehicle.id, userId);
+  assert.strictEqual(journeys.length, 1, 'Must have 1 journey recorded');
+  assert(journeys[0].distance_km > 0.3, 'Journey distance must be computed via Haversine');
+  assert.strictEqual(journeys[0].points_count, 2, 'Journey must contain 2 points');
+
+  const points = TrackingService.getJourneyPoints(journeys[0].id, userId);
+  assert.strictEqual(points.length, 2, 'Must retrieve 2 journey points');
+  assert.strictEqual(points[0].latitude, 51.5007);
+
+  // Speed Limit Cache & Overpass Integration Test
+  const { speedLimitKmh, roadName } = await TrackingService.getSpeedLimit(51.5007, -0.1246);
+  // Grid cache row check
+  const cacheRow = db.prepare('SELECT count(*) as count FROM osm_speed_limits_cache').get() as any;
+  assert(cacheRow.count >= 1, 'Speed limit cache table must store query results');
+
+  // Retention job test
+  TrackingService.runRetentionJob();
+  console.log('  ✅ Tracked items, Bearer auth, ingestion, journey detection & speed limit cache verified.\n');
+
   // Cleanup test mutations from DB so live system remains untouched
   db.prepare("DELETE FROM users WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM devices WHERE id LIKE '%test%'").run();
   db.prepare("DELETE FROM folders WHERE id LIKE '%test%'").run();
+  db.prepare("DELETE FROM tracked_items WHERE user_id = ? OR id = ?").run(userId, testVehicle.id);
   db.prepare("UPDATE system_settings SET value = '' WHERE key IN ('tab_group_devices', 'tab_group_monitoring', 'tab_group_tracking', 'tab_group_cloud')").run();
   db.prepare("UPDATE system_settings SET value = 'Shoreline-Admins' WHERE key = 'ad_admin_group'").run();
 
