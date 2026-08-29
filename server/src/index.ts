@@ -17,6 +17,10 @@ import shareRoutes from './routes/share.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import symbolRoutes from './routes/symbol.routes.js';
 import { monitoringRouter } from './routes/monitoring.routes.js';
+import { dashboardRouter } from './routes/dashboard.routes.js';
+import { trackingRouter } from './routes/tracking.routes.js';
+import { cloudRouter } from './routes/cloud.routes.js';
+import { backupRouter } from './routes/backup.routes.js';
 import { MonitoringService } from './services/monitoring.service.js';
 
 // 1. Initialize SQLite Database & Background Jobs
@@ -40,6 +44,10 @@ app.use('/api/shares', shareRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/symbols', symbolRoutes);
 app.use('/api/monitoring', monitoringRouter);
+app.use('/api/dashboard', dashboardRouter);
+app.use('/api/tracking', trackingRouter);
+app.use('/api/cloud', cloudRouter);
+app.use('/api/backup', backupRouter);
 
 // Direct static route for Symbols
 app.use('/symbols', express.static(config.symbolsDir, {

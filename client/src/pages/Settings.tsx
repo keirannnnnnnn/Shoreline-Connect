@@ -21,18 +21,28 @@ export const Settings: React.FC = () => {
   const [userDevices, setUserDevices] = useState<Device[]>([]);
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
 
-  // Admin: AD Settings
+  // Admin: AD Settings & Tab Group Access
   const [adSettings, setAdSettings] = useState<SystemSettings>({
     ad_domain: 'shoreline.icu',
     ad_url: 'ldap://shoreline.icu:389',
     ad_base_dn: 'DC=shoreline,DC=icu',
-    ad_admin_group: 'Shoreline-Admins',
-    ad_user_group: 'Shoreline-Users',
+    ad_admin_group: '',
+    ad_user_group: '',
+    tab_group_devices: '',
+    tab_group_monitoring: '',
+    tab_group_tracking: '',
+    tab_group_cloud: '',
     git_repo_url: '',
     git_branch: 'main',
     monitoring_hub_url: '',
   });
   const [adSaveStatus, setAdSaveStatus] = useState<string | null>(null);
+
+  // Backup & Import
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<any | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ success: boolean; message: string; summary?: any } | null>(null);
 
   // Admin: Users & On-Behalf Devices
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -164,6 +174,48 @@ export const Settings: React.FC = () => {
     }
   };
 
+  // Backup & Restore Handlers
+  const handleDownloadBackup = () => {
+    window.open('/api/backup/export', '_blank');
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFile(file);
+    setImportResult(null);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        setImportPreview(parsed);
+      } catch (err: any) {
+        alert('Invalid JSON backup file format: ' + err.message);
+        setImportPreview(null);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExecuteImport = async () => {
+    if (!importPreview) return;
+    if (!window.confirm('Restore this backup into Shoreline Connect? Existing items with matching IDs will be overwritten/updated.')) return;
+
+    setIsImporting(true);
+    setImportResult(null);
+    try {
+      const res = await api.backup.import(importPreview);
+      setImportResult(res);
+      loadGeneralData();
+      if (isAdmin) loadAdminData();
+    } catch (err: any) {
+      setImportResult({ success: false, message: err.message });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   // Admin: Check update
   const handleCheckUpdate = async () => {
     setLoading(true);
@@ -289,6 +341,18 @@ export const Settings: React.FC = () => {
               <span className="ml-auto px-1.5 py-0.5 rounded text-[10px] bg-surface font-mono text-slate-400">
                 {guestShares.length}
               </span>
+            </button>
+
+            <button
+              onClick={() => handleTabChange('backup')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                activeTab === 'backup'
+                  ? 'bg-surface-active text-white border border-surface-borderLight shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+              }`}
+            >
+              <SymbolIcon name="archivebox.fill" className="w-4 h-4 text-amber-400" />
+              <span>Backup & Restore</span>
             </button>
 
             {/* Admin Section */}
@@ -514,16 +578,119 @@ export const Settings: React.FC = () => {
               </div>
             )}
 
+            {/* 3.5. BACKUP & RESTORE PANEL */}
+            {activeTab === 'backup' && (
+              <div className="rounded-3xl bg-surface-card border border-surface-border p-6 space-y-6">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <SymbolIcon name="archivebox.fill" className="w-5 h-5 text-amber-400" />
+                    <span>Backup & Restore System Data</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Export your devices, folders, configurations, and widget dashboard layouts to a portable JSON backup file.
+                  </p>
+                </div>
+
+                {importResult && (
+                  <div className={`p-4 rounded-2xl border text-xs ${
+                    importResult.success
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-danger/10 border-danger/30 text-danger'
+                  }`}>
+                    <p className="font-semibold">{importResult.message}</p>
+                    {importResult.summary && (
+                      <p className="text-[11px] mt-1 text-slate-300">
+                        Restored: {importResult.summary.devicesRestored} devices, {importResult.summary.foldersRestored} folders, {importResult.summary.settingsRestored} settings.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Export Section */}
+                  <div className="p-5 rounded-2xl bg-surface border border-surface-border space-y-4 flex flex-col justify-between">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-white font-semibold text-xs">
+                        <SymbolIcon name="arrow.down.doc.fill" className="w-4 h-4 text-emerald-400" />
+                        <span>Export Backup Archive</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Generates an immediate timestamped JSON snapshot containing all your {isAdmin ? 'system data, devices, and settings' : 'personal devices and folders'}.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={handleDownloadBackup}
+                      className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-glow shadow-emerald-500/20 transition-all flex items-center justify-center gap-2"
+                    >
+                      <SymbolIcon name="arrow.down.to.line" className="w-3.5 h-3.5" />
+                      <span>Download Backup JSON</span>
+                    </button>
+                  </div>
+
+                  {/* Import Section */}
+                  <div className="p-5 rounded-2xl bg-surface border border-surface-border space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-white font-semibold text-xs">
+                        <SymbolIcon name="arrow.up.doc.fill" className="w-4 h-4 text-amber-400" />
+                        <span>Import & Restore Backup</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Upload a previously generated <code className="text-slate-300 font-mono">.json</code> backup to restore devices, folders, and settings.
+                      </p>
+                    </div>
+
+                    <div>
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleFileSelect}
+                        className="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-surface-active file:text-slate-200 hover:file:bg-surface-hover file:cursor-pointer cursor-pointer"
+                      />
+                    </div>
+
+                    {importPreview && (
+                      <div className="p-3 rounded-xl bg-black/40 border border-surface-border text-[11px] space-y-1">
+                        <p className="font-semibold text-slate-200">
+                          Backup File: <span className="font-mono text-amber-300">{importFile?.name || 'backup.json'}</span>
+                        </p>
+                        <p className="text-slate-400">Exported: {importPreview.exportedAt ? new Date(importPreview.exportedAt).toLocaleString() : 'Unknown date'}</p>
+                        <p className="text-slate-400">Devices: {importPreview.data?.devices?.length || 0} | Folders: {importPreview.data?.folders?.length || 0}</p>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleExecuteImport}
+                      disabled={!importPreview || isImporting}
+                      className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold shadow-glow shadow-amber-500/20 transition-all flex items-center justify-center gap-2"
+                    >
+                      {isImporting ? (
+                        <>
+                          <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-3.5 h-3.5 animate-spin" />
+                          <span>Restoring Data...</span>
+                        </>
+                      ) : (
+                        <>
+                          <SymbolIcon name="arrow.trianglehead.2.clockwise.rotate.90" className="w-3.5 h-3.5" />
+                          <span>Restore Data Now</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* 4. ADMIN: ACTIVE DIRECTORY SETTINGS */}
             {isAdmin && activeTab === 'ad' && (
               <div className="rounded-3xl bg-surface-card border border-surface-border p-6 space-y-6">
                 <div>
                   <h2 className="text-base font-bold text-white flex items-center gap-2">
                     <SymbolIcon name="lock.shield.fill" className="w-5 h-5 text-purple-400" />
-                    <span>Active Directory & LDAP Configuration</span>
+                    <span>Active Directory & Tab Group Mapping</span>
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Configure domain mappings for Shoreline.icu domain controllers
+                    Configure Active Directory domain mappings and assign security groups to individual dashboard tabs.
                   </p>
                 </div>
 
@@ -573,26 +740,99 @@ export const Settings: React.FC = () => {
 
                     <div>
                       <label className="block text-xs font-semibold text-purple-300 mb-1.5">
-                        Admin Role AD Group Name
+                        Global Admin AD Group Name
                       </label>
                       <input
                         type="text"
                         value={adSettings.ad_admin_group || ''}
                         onChange={(e) => setAdSettings({ ...adSettings, ad_admin_group: e.target.value })}
+                        placeholder="e.g. Shoreline-Admins"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-purple-500/40 text-white text-sm font-mono focus:ring-1 focus:ring-purple-500 focus:outline-none"
                       />
                     </div>
 
                     <div>
                       <label className="block text-xs font-semibold text-blue-300 mb-1.5">
-                        General User AD Group Name
+                        Default User AD Group Name
                       </label>
                       <input
                         type="text"
                         value={adSettings.ad_user_group || ''}
                         onChange={(e) => setAdSettings({ ...adSettings, ad_user_group: e.target.value })}
+                        placeholder="e.g. Domain Users"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-blue-500/40 text-white text-sm font-mono focus:ring-1 focus:ring-purple-500 focus:outline-none"
                       />
+                    </div>
+
+                    {/* Per-Tab AD Group Permissions */}
+                    <div className="sm:col-span-2 pt-4 border-t border-surface-border space-y-3">
+                      <div>
+                        <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                          <SymbolIcon name="lock.shield.fill" className="w-4 h-4 text-brand-400" />
+                          <span>Per-Tab Active Directory Security Groups</span>
+                        </h3>
+                        <p className="text-[11px] text-slate-400">
+                          Configure which AD group grants access to each tab. Leave blank to default to the General User group.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
+                            <SymbolIcon name="macbook.and.iphone" className="w-3.5 h-3.5 text-blue-400" />
+                            <span>Devices Tab AD Group</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={adSettings.tab_group_devices || ''}
+                            onChange={(e) => setAdSettings({ ...adSettings, tab_group_devices: e.target.value })}
+                            placeholder="Leave blank for all users"
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
+                            <SymbolIcon name="waveform.path.ecg" className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Monitoring Tab AD Group</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={adSettings.tab_group_monitoring || ''}
+                            onChange={(e) => setAdSettings({ ...adSettings, tab_group_monitoring: e.target.value })}
+                            placeholder="Leave blank for all users"
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
+                            <SymbolIcon name="location.fill" className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Tracking Tab AD Group</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={adSettings.tab_group_tracking || ''}
+                            onChange={(e) => setAdSettings({ ...adSettings, tab_group_tracking: e.target.value })}
+                            placeholder="Leave blank for all users"
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
+                            <SymbolIcon name="cloud.fill" className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Cloud Vault AD Group</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={adSettings.tab_group_cloud || ''}
+                            onChange={(e) => setAdSettings({ ...adSettings, tab_group_cloud: e.target.value })}
+                            placeholder="Leave blank for all users"
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
                     </div>
 
                     <div className="sm:col-span-2">

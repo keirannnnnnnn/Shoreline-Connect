@@ -168,6 +168,35 @@ export const api = {
     getMetrics: (deviceId: string, range: '1h' | '6h' | '24h' | '7d' | '30d' | '120d' = '1h') =>
       fetchJson<{ range: string; resolution: string; points: MetricPoint[] }>('/monitoring/devices/' + deviceId + '/metrics?range=' + range),
   },
+
+  dashboard: {
+    getLayout: () => fetchJson<{ layout: any[] }>('/dashboard/layout'),
+    saveLayout: (layout: any[]) =>
+      fetchJson<{ success: boolean; message: string }>('/dashboard/layout', {
+        method: 'POST',
+        body: JSON.stringify({ layout }),
+      }),
+    getWidgets: () => fetchJson<{ widgets: any[] }>('/dashboard/widgets'),
+  },
+
+  tracking: {
+    getStatus: () => fetchJson<{ enabled: boolean; feature: string; scaffold: boolean; message: string }>('/tracking/status'),
+    getDevices: () => fetchJson<{ devices: any[]; message: string }>('/tracking/devices'),
+  },
+
+  cloud: {
+    getStatus: () => fetchJson<{ enabled: boolean; feature: string; scaffold: boolean; message: string }>('/cloud/status'),
+    getFiles: () => fetchJson<{ files: any[]; storageUsedBytes: number; storageQuotaBytes: number }>('/cloud/files'),
+  },
+
+  backup: {
+    exportUrl: '/api/backup/export',
+    import: (backupData: any) =>
+      fetchJson<{ success: boolean; message: string; summary: any }>('/backup/import', {
+        method: 'POST',
+        body: JSON.stringify(backupData),
+      }),
+  },
 };
 
 export interface MonitoredDevice {

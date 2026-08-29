@@ -38,27 +38,71 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch }) => {
           <nav className="hidden md:flex items-center gap-1 pl-4 border-l border-surface-border">
             <Link
               to="/"
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
                 location.pathname === '/' 
                   ? 'bg-surface-active text-white border border-surface-borderLight' 
                   : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
               }`}
             >
-              <SymbolIcon name="macbook.and.iphone" className="w-4 h-4" />
-              <span>Devices</span>
+              <SymbolIcon name="square.grid.2x2" className="w-3.5 h-3.5" />
+              <span>Dashboard</span>
             </Link>
 
-            <Link
-              to="/monitoring"
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
-                location.pathname.startsWith('/monitoring')
-                  ? 'bg-surface-active text-white border border-surface-borderLight'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
-              }`}
-            >
-              <SymbolIcon name="waveform.path.ecg" className="w-4 h-4" />
-              <span>Monitoring</span>
-            </Link>
+            {(!user?.permissions || user.permissions.tabs?.devices?.canAccess) && (
+              <Link
+                to="/devices"
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  location.pathname.startsWith('/devices') 
+                    ? 'bg-surface-active text-white border border-surface-borderLight' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                }`}
+              >
+                <SymbolIcon name="macbook.and.iphone" className="w-3.5 h-3.5" />
+                <span>Devices</span>
+              </Link>
+            )}
+
+            {(!user?.permissions || user.permissions.tabs?.monitoring?.canAccess) && (
+              <Link
+                to="/monitoring"
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  location.pathname.startsWith('/monitoring')
+                    ? 'bg-surface-active text-white border border-surface-borderLight'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                }`}
+              >
+                <SymbolIcon name="waveform.path.ecg" className="w-3.5 h-3.5" />
+                <span>Monitoring</span>
+              </Link>
+            )}
+
+            {(!user?.permissions || user.permissions.tabs?.tracking?.canAccess) && (
+              <Link
+                to="/tracking"
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  location.pathname.startsWith('/tracking')
+                    ? 'bg-surface-active text-white border border-surface-borderLight'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                }`}
+              >
+                <SymbolIcon name="location.fill" className="w-3.5 h-3.5" />
+                <span>Tracking</span>
+              </Link>
+            )}
+
+            {(!user?.permissions || user.permissions.tabs?.cloud?.canAccess) && (
+              <Link
+                to="/cloud"
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  location.pathname.startsWith('/cloud')
+                    ? 'bg-surface-active text-white border border-surface-borderLight'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                }`}
+              >
+                <SymbolIcon name="cloud.fill" className="w-3.5 h-3.5" />
+                <span>Cloud</span>
+              </Link>
+            )}
           </nav>
         </div>
 

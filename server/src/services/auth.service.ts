@@ -4,6 +4,23 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/env.js';
 import { db } from '../db/database.js';
 
+export interface TabPermission {
+  canAccess: boolean;
+  isAdmin: boolean;
+  group: string;
+}
+
+export interface UserPermissions {
+  tabs: {
+    devices: TabPermission;
+    monitoring: TabPermission;
+    tracking: TabPermission;
+    cloud: TabPermission;
+    [key: string]: TabPermission;
+  };
+  isGlobalAdmin: boolean;
+}
+
 export interface UserRecord {
   id: string;
   username: string;
@@ -11,8 +28,10 @@ export interface UserRecord {
   email: string | null;
   role: 'admin' | 'user';
   ad_dn: string | null;
+  ad_groups?: string | null;
   last_login_at: string | null;
   created_at: string;
+  permissions?: UserPermissions;
 }
 
 export interface JwtPayload {
@@ -23,6 +42,100 @@ export interface JwtPayload {
 }
 
 export class AuthService {
+  /**
+   * Exact match or CN match helper for Active Directory group strings
+   */
+  static checkGroupMatch(userGroupStr: string, targetGroupName: string): boolean {
+    if (!userGroupStr || !targetGroupName) return false;
+    const ug = userGroupStr.toLowerCase().trim();
+    const target = targetGroupName.toLowerCase().trim();
+    if (!ug || !target) return false;
+    if (ug === target) return true;
+    if (ug === `cn=${target}`) return true;
+    if (ug.startsWith(`cn=${target},`)) return true;
+    return false;
+  }
+
+  /**
+   * Calculate live per-tab permissions for a user
+   */
+  static getUserPermissions(userId: string): UserPermissions {
+    const userRow = db.prepare('SELECT id, username, role, ad_dn, ad_groups FROM users WHERE id = ?').get(userId) as { id: string; username: string; role: string; ad_dn: string | null; ad_groups: string | null } | undefined;
+    if (!userRow) {
+      return {
+        tabs: {
+          devices: { canAccess: false, isAdmin: false, group: '' },
+          monitoring: { canAccess: false, isAdmin: false, group: '' },
+          tracking: { canAccess: false, isAdmin: false, group: '' },
+          cloud: { canAccess: false, isAdmin: false, group: '' },
+        },
+        isGlobalAdmin: false,
+      };
+    }
+
+    let userGroups: string[] = [];
+    if (userRow.ad_groups) {
+      try {
+        userGroups = JSON.parse(userRow.ad_groups);
+      } catch {}
+    }
+
+    const isGlobalAdmin = userRow.role === 'admin';
+
+    // Retrieve active AD group settings from system_settings
+    const adminGroupSetting = db.prepare("SELECT value FROM system_settings WHERE key = 'ad_admin_group'").get() as { value: string } | undefined;
+    const userGroupSetting = db.prepare("SELECT value FROM system_settings WHERE key = 'ad_user_group'").get() as { value: string } | undefined;
+
+    const adminGroups = (adminGroupSetting?.value || config.ad.adminGroup || '')
+      .split(/[,;]/)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const defaultUserGroupSetting = userGroupSetting?.value !== undefined ? userGroupSetting.value.trim() : (config.ad.userGroup || '');
+    const defaultUserGroups = defaultUserGroupSetting
+      .split(/[,;]/)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const isUserAdminGroupMember = isGlobalAdmin || userGroups.some(g =>
+      adminGroups.some(ag => this.checkGroupMatch(g, ag))
+    );
+
+    const tabKeys = ['devices', 'monitoring', 'tracking', 'cloud'];
+    const tabs: Record<string, TabPermission> = {};
+
+    for (const tab of tabKeys) {
+      const tabSetting = db.prepare("SELECT value FROM system_settings WHERE key = ?").get(`tab_group_${tab}`) as { value: string } | undefined;
+      const configuredGroup = (tabSetting?.value || '').trim();
+
+      let canAccess = false;
+
+      if (!configuredGroup) {
+        // If no specific group is configured for this tab, all authenticated users have access
+        canAccess = true;
+      } else {
+        const requiredGroups = configuredGroup.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+        canAccess = userGroups.some(g =>
+          requiredGroups.some(rg => this.checkGroupMatch(g, rg))
+        );
+      }
+
+      // Per-tab Admin: User must have tab access AND be in the Shoreline Administrators group
+      const isTabAdmin = canAccess && isUserAdminGroupMember;
+
+      tabs[tab] = {
+        canAccess,
+        isAdmin: isTabAdmin,
+        group: configuredGroup,
+      };
+    }
+
+    return {
+      tabs: tabs as any,
+      isGlobalAdmin,
+    };
+  }
+
   /**
    * Authenticate user with Active Directory (Shoreline.icu)
    */
@@ -99,22 +212,13 @@ export class AuthService {
       .map(s => s.trim().toLowerCase())
       .filter(Boolean);
 
-    const checkGroupMatch = (userGroupStr: string, targetGroupName: string) => {
-      const ug = userGroupStr.toLowerCase().trim();
-      const target = targetGroupName.toLowerCase().trim();
-      if (ug === target) return true;
-      if (ug === `cn=${target}`) return true;
-      if (ug.startsWith(`cn=${target},`)) return true;
-      return false;
-    };
-
     const isAdminMember = userGroups.some(g => 
-      adminGroups.some(ag => checkGroupMatch(g, ag))
+      adminGroups.some(ag => this.checkGroupMatch(g, ag))
     );
 
     const isUserMember = userGroups.some(g => 
-      userGroupsAllowed.some(ug => checkGroupMatch(g, ug))
-    );
+      userGroupsAllowed.some(ug => this.checkGroupMatch(g, ug))
+    ) || (userGroupsAllowed.length === 0);
 
     let role: 'admin' | 'user';
 
@@ -128,24 +232,26 @@ export class AuthService {
 
     console.log(`[AuthService] User '${authenticatedUser.sAMAccountName}' resolved: isAdmin=${isAdminMember}, isUser=${isUserMember} -> role='${role}' (AD groups: [${authenticatedUser.groups.join(', ')}])`);
 
-    // Upsert user in local SQLite database
+    // Upsert user in local SQLite database with ad_groups JSON array
     let user = (db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(authenticatedUser.sAMAccountName) as unknown) as UserRecord | undefined;
 
     const now = new Date().toISOString();
+    const groupsJson = JSON.stringify(authenticatedUser.groups);
+
     if (user) {
       db.prepare(`
         UPDATE users 
-        SET display_name = ?, email = ?, role = ?, ad_dn = ?, last_login_at = ?
+        SET display_name = ?, email = ?, role = ?, ad_dn = ?, ad_groups = ?, last_login_at = ?
         WHERE id = ?
-      `).run(authenticatedUser.displayName, authenticatedUser.email, role, authenticatedUser.dn, now, user.id);
+      `).run(authenticatedUser.displayName, authenticatedUser.email, role, authenticatedUser.dn, groupsJson, now, user.id);
 
       user = (db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) as unknown) as UserRecord;
     } else {
       const newId = uuidv4();
       db.prepare(`
-        INSERT INTO users (id, username, display_name, email, role, ad_dn, last_login_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(newId, authenticatedUser.sAMAccountName, authenticatedUser.displayName, authenticatedUser.email, role, authenticatedUser.dn, now, now);
+        INSERT INTO users (id, username, display_name, email, role, ad_dn, ad_groups, last_login_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(newId, authenticatedUser.sAMAccountName, authenticatedUser.displayName, authenticatedUser.email, role, authenticatedUser.dn, groupsJson, now, now);
 
       user = (db.prepare('SELECT * FROM users WHERE id = ?').get(newId) as unknown) as UserRecord;
     }
@@ -158,8 +264,9 @@ export class AuthService {
     };
 
     const token = jwt.sign(payload, config.jwtSecret, { expiresIn: '7d' });
+    const permissions = this.getUserPermissions(user.id);
 
-    return { token, user };
+    return { token, user: { ...user, permissions } };
   }
 
   /**
@@ -263,16 +370,20 @@ export class AuthService {
   }
 
   /**
-   * Get user by ID
+   * Get user by ID with live per-tab permissions
    */
   static getUserById(id: string): UserRecord | undefined {
-    return (db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown) as UserRecord | undefined;
+    const user = (db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown) as UserRecord | undefined;
+    if (!user) return undefined;
+    const permissions = this.getUserPermissions(user.id);
+    return { ...user, permissions };
   }
 
   /**
    * Get all active users (for Admin directory & internal sharing user selection)
    */
   static getAllUsers(): UserRecord[] {
-    return (db.prepare('SELECT id, username, display_name, email, role, last_login_at, created_at FROM users ORDER BY display_name ASC').all() as unknown) as UserRecord[];
+    const users = (db.prepare('SELECT id, username, display_name, email, role, last_login_at, created_at FROM users ORDER BY display_name ASC').all() as unknown) as UserRecord[];
+    return users.map(u => ({ ...u, permissions: this.getUserPermissions(u.id) }));
   }
 }

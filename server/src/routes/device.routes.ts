@@ -1,14 +1,15 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { authenticateUser, requireTabAccess, AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { DeviceService } from '../services/device.service.js';
 import { AuditService } from '../services/audit.service.js';
 import { config } from '../config/env.js';
 
 const router = Router();
 
-// Apply auth to all device routes
+// Apply auth and tab access check to all device routes
 router.use(authenticateUser);
+router.use(requireTabAccess('devices'));
 
 /**
  * GET /api/devices

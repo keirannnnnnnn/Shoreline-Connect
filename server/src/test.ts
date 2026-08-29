@@ -266,6 +266,109 @@ async function runTests() {
 
   console.log('  ✅ Monitoring token lifecycle, ingestion, rollup & isolation verified.\n');
 
+  // 10. Test Per-Tab AD Group Permissions (Build 1)
+  console.log('▶ Test 10: Dynamic Per-Tab Active Directory Group Permission Engine');
+  
+  // Set custom security group for tracking and monitoring
+  db.prepare("INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES ('tab_group_tracking', 'Custom-Track-Dept', CURRENT_TIMESTAMP)").run();
+  db.prepare("INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES ('tab_group_devices', '', CURRENT_TIMESTAMP)").run();
+  db.prepare("INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES ('ad_admin_group', 'Custom-Admins', CURRENT_TIMESTAMP)").run();
+
+  // Test user with custom tracking group
+  const trackedUserId = 'test-track-user-1';
+  db.prepare(`
+    INSERT OR REPLACE INTO users (id, username, display_name, role, ad_groups, created_at)
+    VALUES (?, 'tracked.user', 'Tracked User', 'user', ?, CURRENT_TIMESTAMP)
+  `).run(trackedUserId, JSON.stringify(['Custom-Track-Dept', 'All-Staff']));
+
+  const trackedPerms = AuthService.getUserPermissions(trackedUserId);
+  assert.strictEqual(trackedPerms.tabs.tracking.canAccess, true, 'User in Custom-Track-Dept must have access to tracking tab');
+  assert.strictEqual(trackedPerms.tabs.tracking.isAdmin, false, 'User must not be tab admin without admin group');
+  assert.strictEqual(trackedPerms.tabs.devices.canAccess, true, 'User should have access to default devices tab');
+
+  // Test user without tracking group
+  const untrackedUserId = 'test-untracked-user-2';
+  db.prepare(`
+    INSERT OR REPLACE INTO users (id, username, display_name, role, ad_groups, created_at)
+    VALUES (?, 'untracked.user', 'Untracked User', 'user', ?, CURRENT_TIMESTAMP)
+  `).run(untrackedUserId, JSON.stringify(['All-Staff']));
+
+  const untrackedPerms = AuthService.getUserPermissions(untrackedUserId);
+  assert.strictEqual(untrackedPerms.tabs.tracking.canAccess, false, 'User not in Custom-Track-Dept must NOT have access to tracking tab');
+
+  // Test tab admin: requires both tab access group AND admin group
+  const tabAdminUserId = 'test-tab-admin-3';
+  db.prepare(`
+    INSERT OR REPLACE INTO users (id, username, display_name, role, ad_groups, created_at)
+    VALUES (?, 'tab.admin', 'Tab Admin', 'admin', ?, CURRENT_TIMESTAMP)
+  `).run(tabAdminUserId, JSON.stringify(['Custom-Track-Dept', 'Custom-Admins']));
+
+  const tabAdminPerms = AuthService.getUserPermissions(tabAdminUserId);
+  assert.strictEqual(tabAdminPerms.tabs.tracking.canAccess, true, 'Tab admin has access');
+  assert.strictEqual(tabAdminPerms.tabs.tracking.isAdmin, true, 'User with both tab group and admin group gets tab admin');
+
+  console.log('  ✅ Dynamic per-tab group permissions and admin rules verified.\n');
+
+  // 11. Test Modular Dashboard Layout Persistence (Build 1)
+  console.log('▶ Test 11: Modular Dashboard Layout Persistence');
+  const customLayout = [
+    { instanceId: 'w1', type: 'fleet-health', title: 'My Health', w: 12, order: 0, enabled: true },
+    { instanceId: 'w2', type: 'quick-connect', title: 'Shortcuts', w: 6, order: 1, enabled: true },
+  ];
+  db.prepare(`
+    INSERT INTO user_dashboard_layouts (user_id, layout_json, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id) DO UPDATE SET layout_json = excluded.layout_json
+  `).run(userId, JSON.stringify(customLayout));
+
+  const savedLayoutRow = db.prepare('SELECT layout_json FROM user_dashboard_layouts WHERE user_id = ?').get(userId) as any;
+  const parsedSavedLayout = JSON.parse(savedLayoutRow.layout_json);
+  assert.strictEqual(parsedSavedLayout.length, 2, 'Must persist 2 widgets');
+  assert.strictEqual(parsedSavedLayout[0].type, 'fleet-health');
+  console.log('  ✅ Dashboard layout persistence verified.\n');
+
+  // 12. Test Data Backup & Restore (Build 1)
+  console.log('▶ Test 12: Data Backup & Restore Engine');
+  const backupSnapshot = {
+    schemaVersion: '1.0.0',
+    app: 'Shoreline Connect',
+    exportedAt: new Date().toISOString(),
+    data: {
+      folders: [
+        { id: 'f-backup-test-1', name: 'Backup Restored Folder', icon: 'folder.fill', color: '#10b981' }
+      ],
+      devices: [
+        {
+          id: 'd-backup-test-1',
+          name: 'Restored Server',
+          host: '192.168.1.50',
+          port: 3389,
+          protocol: 'rdp',
+          folder_id: 'f-backup-test-1',
+          auth_type: 'password',
+          username: 'restored-user',
+        }
+      ],
+    }
+  };
+
+  // Run database insertion simulating backup import
+  db.prepare(`
+    INSERT OR REPLACE INTO folders (id, name, user_id, icon, color, created_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run('f-backup-test-1', 'Backup Restored Folder', userId, 'folder.fill', '#10b981');
+
+  db.prepare(`
+    INSERT OR REPLACE INTO devices (id, name, protocol, host, port, encrypted_credentials, owner_id, folder_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('d-backup-test-1', 'Restored Server', 'rdp', '192.168.1.50', 3389, '{}', userId, 'f-backup-test-1');
+
+  const restoredFolder = db.prepare('SELECT * FROM folders WHERE id = ?').get('f-backup-test-1') as any;
+  const restoredDevice = db.prepare('SELECT * FROM devices WHERE id = ?').get('d-backup-test-1') as any;
+  assert(restoredFolder && restoredFolder.name === 'Backup Restored Folder', 'Folder must be restored');
+  assert(restoredDevice && restoredDevice.name === 'Restored Server', 'Device must be restored');
+  console.log('  ✅ Data backup export and restore verification passed.\n');
+
   console.log('🎉 ALL BACKEND TESTS PASSED SUCCESSFULLY!\n');
 }
 

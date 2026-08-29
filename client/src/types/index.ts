@@ -1,3 +1,20 @@
+export interface TabPermission {
+  canAccess: boolean;
+  isAdmin: boolean;
+  group: string;
+}
+
+export interface UserPermissions {
+  tabs: {
+    devices: TabPermission;
+    monitoring: TabPermission;
+    tracking: TabPermission;
+    cloud: TabPermission;
+    [key: string]: TabPermission;
+  };
+  isGlobalAdmin: boolean;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -7,6 +24,7 @@ export interface User {
   ad_dn?: string | null;
   last_login_at?: string | null;
   created_at?: string;
+  permissions?: UserPermissions;
 }
 
 export interface DeviceParameters {
@@ -125,4 +143,31 @@ export interface UpdateStatus {
   hasUpdates: boolean;
   latestRemoteCommit?: string;
   error?: string;
+}
+
+export interface WidgetCatalogItem {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  category: 'monitoring' | 'devices' | 'system' | 'shortcuts';
+  requiredTab?: string;
+  icon: string;
+  defaultSize: { w: number; h: number };
+}
+
+export interface DashboardWidgetConfig {
+  instanceId: string;
+  type: string;
+  title: string;
+  w?: number;
+  order: number;
+  enabled?: boolean;
+}
+
+export interface BackupSummary {
+  devicesRestored: number;
+  foldersRestored: number;
+  settingsRestored: number;
+  dashboardLayoutRestored: boolean;
 }

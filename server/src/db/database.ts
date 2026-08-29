@@ -22,10 +22,17 @@ export function initDatabase() {
       email TEXT,
       role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
       ad_dn TEXT,
+      ad_groups TEXT,
       last_login_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+  `);
 
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN ad_groups TEXT;');
+  } catch {}
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS folders (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -186,6 +193,13 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_metrics_1h_dev_time ON monitoring_metrics_rollup_1h(device_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS user_dashboard_layouts (
+      user_id TEXT PRIMARY KEY,
+      layout_json TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
   `);
 
   // Initialize default settings if not exists
@@ -195,6 +209,10 @@ export function initDatabase() {
   insertSetting.run('ad_base_dn', config.ad.baseDn);
   insertSetting.run('ad_admin_group', config.ad.adminGroup);
   insertSetting.run('ad_user_group', config.ad.userGroup);
+  insertSetting.run('tab_group_devices', process.env.TAB_GROUP_DEVICES || config.ad.userGroup || '');
+  insertSetting.run('tab_group_monitoring', process.env.TAB_GROUP_MONITORING || config.ad.userGroup || '');
+  insertSetting.run('tab_group_tracking', process.env.TAB_GROUP_TRACKING || config.ad.userGroup || '');
+  insertSetting.run('tab_group_cloud', process.env.TAB_GROUP_CLOUD || config.ad.userGroup || '');
   insertSetting.run('git_repo_url', config.git.repoUrl);
   insertSetting.run('git_branch', config.git.branch);
   insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');

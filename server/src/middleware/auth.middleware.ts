@@ -35,3 +35,50 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   }
   next();
 }
+
+/**
+ * Enforce per-tab access based on Active Directory group configuration
+ */
+export function requireTabAccess(tabKey: string) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+    }
+
+    const permissions = AuthService.getUserPermissions(req.user.userId);
+    const tabPerm = permissions.tabs[tabKey];
+
+    if (!tabPerm || !tabPerm.canAccess) {
+      return res.status(403).json({
+        error: `Access denied: You do not have permission to access the '${tabKey}' feature. Active Directory group requirement not met.`,
+        tab: tabKey,
+        requiredGroup: tabPerm?.group || '',
+      });
+    }
+
+    next();
+  };
+}
+
+/**
+ * Enforce per-tab admin requirement (Member of Tab Access Group AND Shoreline Admin Group)
+ */
+export function requireTabAdmin(tabKey: string) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+    }
+
+    const permissions = AuthService.getUserPermissions(req.user.userId);
+    const tabPerm = permissions.tabs[tabKey];
+
+    if (!tabPerm || !tabPerm.canAccess || !tabPerm.isAdmin) {
+      return res.status(403).json({
+        error: `Access denied: Administrator privileges required for '${tabKey}'.`,
+        tab: tabKey,
+      });
+    }
+
+    next();
+  };
+}

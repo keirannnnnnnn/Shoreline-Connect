@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { MonitoringService } from '../services/monitoring.service.js';
-import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { authenticateUser, requireTabAccess, AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const monitoringRouter = Router();
+
+const tabAuth = [authenticateUser, requireTabAccess('monitoring')];
 
 /**
  * 1. Agent Ingest Endpoint (Authenticated by per-device Bearer token)
@@ -107,7 +109,7 @@ monitoringRouter.get('/agent/download/:os/:arch', (req: Request, res: Response) 
 /**
  * 5. UI API: List Monitored Devices for current user
  */
-monitoringRouter.get('/devices', authenticateUser, (req: AuthenticatedRequest, res: Response) => {
+monitoringRouter.get('/devices', tabAuth, (req: AuthenticatedRequest, res: Response) => {
   try {
     const devices = MonitoringService.getUserMonitoredDevices(req.user!.userId);
     return res.json({ devices });
@@ -119,7 +121,7 @@ monitoringRouter.get('/devices', authenticateUser, (req: AuthenticatedRequest, r
 /**
  * 6. UI API: Get Agent Status / Install info for a specific device
  */
-monitoringRouter.get('/devices/:id', authenticateUser, (req: AuthenticatedRequest, res: Response) => {
+monitoringRouter.get('/devices/:id', tabAuth, (req: AuthenticatedRequest, res: Response) => {
   try {
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.headers['x-forwarded-host'] || req.get('host');
@@ -135,7 +137,7 @@ monitoringRouter.get('/devices/:id', authenticateUser, (req: AuthenticatedReques
 /**
  * 7. UI API: Enable Monitoring for a device
  */
-monitoringRouter.post('/devices/:id/enable', authenticateUser, (req: AuthenticatedRequest, res: Response) => {
+monitoringRouter.post('/devices/:id/enable', tabAuth, (req: AuthenticatedRequest, res: Response) => {
   try {
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.headers['x-forwarded-host'] || req.get('host');
@@ -151,7 +153,7 @@ monitoringRouter.post('/devices/:id/enable', authenticateUser, (req: Authenticat
 /**
  * 8. UI API: Regenerate token for a device
  */
-monitoringRouter.post('/devices/:id/regenerate-token', authenticateUser, (req: AuthenticatedRequest, res: Response) => {
+monitoringRouter.post('/devices/:id/regenerate-token', tabAuth, (req: AuthenticatedRequest, res: Response) => {
   try {
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.headers['x-forwarded-host'] || req.get('host');
@@ -167,7 +169,7 @@ monitoringRouter.post('/devices/:id/regenerate-token', authenticateUser, (req: A
 /**
  * 9. UI API: Disable Monitoring for a device
  */
-monitoringRouter.post('/devices/:id/disable', authenticateUser, (req: AuthenticatedRequest, res: Response) => {
+monitoringRouter.post('/devices/:id/disable', tabAuth, (req: AuthenticatedRequest, res: Response) => {
   try {
     MonitoringService.disableMonitoring(req.params.id, req.user!.userId);
     return res.json({ success: true });
@@ -179,7 +181,7 @@ monitoringRouter.post('/devices/:id/disable', authenticateUser, (req: Authentica
 /**
  * 10. UI API: Query Time-Series Metrics for charts
  */
-monitoringRouter.get('/devices/:id/metrics', authenticateUser, (req: AuthenticatedRequest, res: Response) => {
+monitoringRouter.get('/devices/:id/metrics', tabAuth, (req: AuthenticatedRequest, res: Response) => {
   try {
     const range = (req.query.range as any) || '1h';
     const metrics = MonitoringService.getDeviceMetrics(req.params.id, req.user!.userId, range);
