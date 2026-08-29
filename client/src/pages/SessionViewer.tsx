@@ -167,13 +167,17 @@ export const SessionViewer: React.FC = () => {
       }
     };
 
-    // Synchronous Ctrl+V clipboard grab before key event executes on remote
+    // Synchronous / Proactive clipboard grab before key event executes on remote
     const handleGlobalKeyDown = async (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+      if (
+        e.key === 'Control' || 
+        e.key === 'Meta' || 
+        ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V'))
+      ) {
         try {
           if (navigator.clipboard && navigator.clipboard.readText && clientRef.current) {
             const text = await navigator.clipboard.readText();
-            if (text) {
+            if (text && text !== lastSyncedClipboardRef.current) {
               lastSyncedClipboardRef.current = text;
               const stream = clientRef.current.createClipboardStream('text/plain');
               const writer = new Guacamole.StringWriter(stream);
@@ -399,6 +403,7 @@ export const SessionViewer: React.FC = () => {
         window.addEventListener('focus', syncLocalToRemote);
         if (containerRef.current) {
           containerRef.current.addEventListener('pointerdown', syncLocalToRemote);
+          containerRef.current.addEventListener('mouseenter', syncLocalToRemote);
         }
 
         // Connect to guacd — this triggers Guacamole.Client to set its tunnel.oninstruction.
@@ -423,6 +428,10 @@ export const SessionViewer: React.FC = () => {
       window.removeEventListener('pointerup', handleUserInteraction, true);
       window.removeEventListener('pointerdown', handleUserInteraction, true);
       window.removeEventListener('focus', syncLocalToRemote);
+      if (containerRef.current) {
+        containerRef.current.removeEventListener('pointerdown', syncLocalToRemote);
+        containerRef.current.removeEventListener('mouseenter', syncLocalToRemote);
+      }
       if (keyboard) {
         keyboard.onkeydown = null;
         keyboard.onkeyup = null;

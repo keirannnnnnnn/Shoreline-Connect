@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Device, Folder, User } from '../types/index.js';
 import { SymbolIcon } from './SymbolIcon.js';
 import { api } from '../lib/api.js';
+import { useAuth } from '../context/AuthContext.js';
 
 interface AddDeviceModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
   folders,
   isAdmin = false,
 }) => {
+  const { user: currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState<'general' | 'credentials' | 'advanced' | 'monitoring'>('general');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -284,7 +286,7 @@ export const AddDeviceModal: React.FC<AddDeviceModalProps> = ({
                       onChange={(e) => setTargetUserId(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl bg-surface border border-purple-500/30 text-white text-xs focus:ring-1 focus:ring-purple-500 focus:outline-none"
                     >
-                      <option value="">Create for myself ({usersList.find(u => u.role === 'admin')?.display_name || 'Admin'})</option>
+                      <option value="">Create for myself ({currentUser?.display_name || currentUser?.username || 'Myself'})</option>
                       {usersList.map((u) => (
                         <option key={u.id} value={u.id}>
                           {u.display_name} ({u.username}@shoreline.icu)

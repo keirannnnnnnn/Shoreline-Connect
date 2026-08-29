@@ -4,11 +4,10 @@ import { useAuth } from '../context/AuthContext.js';
 import { SymbolIcon } from './SymbolIcon.js';
 
 interface NavbarProps {
-  onOpenAddDevice?: () => void;
   onOpenSearch?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch }) => {
+export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch }) => {
   const { user, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -39,9 +38,9 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
           <nav className="hidden md:flex items-center gap-1 pl-4 border-l border-surface-border">
             <Link
               to="/"
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                location.pathname === '/'
-                  ? 'bg-surface-active text-white shadow-sm'
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
+                location.pathname === '/' 
+                  ? 'bg-surface-active text-white border border-surface-borderLight' 
                   : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
               }`}
             >
@@ -51,9 +50,9 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
 
             <Link
               to="/monitoring"
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
                 location.pathname.startsWith('/monitoring')
-                  ? 'bg-surface-active text-white shadow-sm'
+                  ? 'bg-surface-active text-white border border-surface-borderLight'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
               }`}
             >
@@ -63,32 +62,20 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
           </nav>
         </div>
 
-        {/* Right: Actions & User Menu */}
+        {/* Right: Search & Profile */}
         <div className="flex items-center gap-3">
           
           {/* Quick Search trigger */}
           {onOpenSearch && (
             <button
               onClick={onOpenSearch}
-              className="hidden sm:flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-surface-card hover:bg-surface-hover border border-surface-border text-slate-400 hover:text-slate-200 text-xs transition-all shadow-sm"
-              title="Search devices (Ctrl + K)"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-surface-card hover:bg-surface-hover border border-surface-border text-slate-300 text-xs transition-colors hidden sm:flex"
             >
               <SymbolIcon name="magnifyingglass" className="w-3.5 h-3.5 text-slate-400" />
               <span>Quick search...</span>
               <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-surface-active text-slate-400 rounded border border-surface-border">
                 ⌘K
               </kbd>
-            </button>
-          )}
-
-          {/* Add Device Button */}
-          {onOpenAddDevice && (
-            <button
-              onClick={onOpenAddDevice}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium shadow-sm shadow-brand-600/30 hover:shadow-glow transition-all active:scale-95"
-            >
-              <SymbolIcon name="plus" className="w-4 h-4" />
-              <span className="hidden sm:inline">Add Device</span>
             </button>
           )}
 
@@ -106,7 +93,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
                   {user?.display_name || user?.username}
                 </span>
                 <span className="text-[10px] text-slate-400 font-mono">
-                  {user?.role === 'admin' ? 'Administrator' : 'Shoreline User'}
+                  {user?.role === 'admin' ? 'Administrator' : 'Standard User'}
                 </span>
               </div>
               <SymbolIcon name="chevron.down" className="w-3 h-3 text-slate-400 hidden lg:block" />
@@ -129,7 +116,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAddDevice, onOpenSearch })
                           ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' 
                           : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
                       }`}>
-                        {user?.role === 'admin' ? 'Domain Admin' : 'Domain User'}
+                        {user?.role === 'admin' ? 'Administrator' : 'Standard User'}
                       </span>
                     </div>
                   </div>

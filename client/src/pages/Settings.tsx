@@ -18,6 +18,7 @@ export const Settings: React.FC = () => {
   // General user data
   const [folders, setFolders] = useState<Folder[]>([]);
   const [guestShares, setGuestShares] = useState<GuestShare[]>([]);
+  const [userDevices, setUserDevices] = useState<Device[]>([]);
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
 
   // Admin: AD Settings
@@ -65,12 +66,14 @@ export const Settings: React.FC = () => {
 
   const loadGeneralData = async () => {
     try {
-      const [foldersRes, guestRes] = await Promise.all([
+      const [foldersRes, guestRes, devicesRes] = await Promise.all([
         api.folders.getAll(),
         api.shares.getMyGuestShares(),
+        api.devices.getAll(),
       ]);
       setFolders(foldersRes.folders);
       setGuestShares(guestRes.guestShares);
+      setUserDevices(devicesRes.devices);
     } catch (err) {
       console.error(err);
     }
@@ -107,8 +110,16 @@ export const Settings: React.FC = () => {
   };
 
   const handleRevokeGuestShare = async (shareId: string) => {
-    await api.shares.revokeGuestShare(shareId);
-    await loadGeneralData();
+    if (!window.confirm('Are you sure you want to revoke this guest share link? It will be invalidated immediately.')) {
+      return;
+    }
+    try {
+      await api.shares.revokeGuestShare(shareId);
+      setGuestShares((prev) => prev.filter((g) => g.id !== shareId));
+      await loadGeneralData();
+    } catch (err: any) {
+      alert(`Failed to revoke guest share: ${err.message}`);
+    }
   };
 
   // Admin: Save AD settings
@@ -612,7 +623,7 @@ export const Settings: React.FC = () => {
                         <span className={`px-1.5 py-0.5 rounded font-semibold ${
                           u.role === 'admin' ? 'bg-purple-500/20 text-purple-300' : 'bg-blue-500/20 text-blue-300'
                         }`}>
-                          {u.role === 'admin' ? 'Domain Admin' : 'Domain User'}
+                          {u.role === 'admin' ? 'Administrator' : 'Standard User'}
                         </span>
                         <span className="text-purple-400 flex items-center gap-1 font-semibold">
                           View Devices <SymbolIcon name="chevron.right" className="w-2.5 h-2.5" />
@@ -860,6 +871,7 @@ export const Settings: React.FC = () => {
         isOpen={isFolderModalOpen}
         onClose={() => setIsFolderModalOpen(false)}
         onSuccess={loadGeneralData}
+        devices={userDevices}
       />
 
       {selectedUserForDevices && (

@@ -29,6 +29,7 @@ export const Dashboard: React.FC = () => {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isFolderOpen, setIsFolderOpen] = useState(false);
+  const [managingFolder, setManagingFolder] = useState<Folder | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
@@ -134,6 +135,10 @@ export const Dashboard: React.FC = () => {
     return true;
   });
 
+  const activeFolder = selectedTab.startsWith('folder:')
+    ? folders.find((f) => `folder:${f.id}` === selectedTab) || null
+    : null;
+
   const favorites = devices.filter((d) => !!d.is_favorite);
 
   // Counts for tabs
@@ -144,10 +149,6 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col">
       <Navbar
-        onOpenAddDevice={() => {
-          setEditingDevice(null);
-          setIsAddOpen(true);
-        }}
         onOpenSearch={() => setIsSearchOpen(true)}
       />
 
@@ -324,7 +325,10 @@ export const Dashboard: React.FC = () => {
               ))}
 
               <button
-                onClick={() => setIsFolderOpen(true)}
+                onClick={() => {
+                  setManagingFolder(null);
+                  setIsFolderOpen(true);
+                }}
                 className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-surface hover:bg-surface-hover text-slate-400 hover:text-white border border-dashed border-surface-border flex items-center gap-1"
                 title="Create custom folder"
               >
@@ -350,6 +354,60 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
+        {/* Active Folder Header Banner */}
+        {activeFolder && (
+          <div className="mb-6 p-4 rounded-2xl bg-surface-card border border-surface-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center border flex-shrink-0"
+                style={{
+                  backgroundColor: `${activeFolder.color}15`,
+                  borderColor: `${activeFolder.color}30`,
+                  color: activeFolder.color,
+                }}
+              >
+                <SymbolIcon name={activeFolder.icon || 'folder.fill'} className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>{activeFolder.name}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-surface-active text-slate-400 font-normal">
+                    {filteredDevices.length} {filteredDevices.length === 1 ? 'device' : 'devices'}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400">Custom organization folder</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setManagingFolder(activeFolder);
+                  setIsFolderOpen(true);
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-brand-600/10 hover:bg-brand-600/20 text-brand-400 border border-brand-500/20 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                <SymbolIcon name="plus.circle" className="w-3.5 h-3.5" />
+                <span>Add / Manage Devices in Folder</span>
+              </button>
+
+              <button
+                onClick={async () => {
+                  if (window.confirm(`Delete folder "${activeFolder.name}"? Devices inside will be moved to root.`)) {
+                    await api.folders.delete(activeFolder.id);
+                    setSelectedTab('all');
+                    await loadData();
+                  }
+                }}
+                className="p-1.5 rounded-xl text-slate-500 hover:text-danger hover:bg-danger/10 transition-colors"
+                title="Delete Folder"
+              >
+                <SymbolIcon name="trash" className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 4. Devices Grid */}
         {loading ? (
           <div className="py-20 text-center">
@@ -362,21 +420,38 @@ export const Dashboard: React.FC = () => {
               <SymbolIcon name="server.rack" className="w-6 h-6" />
             </div>
             <h3 className="text-base font-semibold text-slate-200 mb-1">
-              {searchQuery ? 'No matching devices found' : 'No devices in this category'}
+              {searchQuery ? 'No matching devices found' : activeFolder ? `No devices in "${activeFolder.name}"` : 'No devices in this category'}
             </h3>
             <p className="text-xs text-slate-400 max-w-sm mx-auto mb-5">
-              {searchQuery ? 'Try adjusting your search terms.' : 'Add your first RDP, SSH, or VNC remote connection to get started.'}
+              {searchQuery
+                ? 'Try adjusting your search terms.'
+                : activeFolder
+                ? 'Add existing devices to this folder using the button above.'
+                : 'Add your first RDP, SSH, or VNC remote connection to get started.'}
             </p>
-            <button
-              onClick={() => {
-                setEditingDevice(null);
-                setIsAddOpen(true);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-glow shadow-brand-500/20 transition-all"
-            >
-              <SymbolIcon name="plus" className="w-4 h-4" />
-              <span>Add Device</span>
-            </button>
+            {activeFolder ? (
+              <button
+                onClick={() => {
+                  setManagingFolder(activeFolder);
+                  setIsFolderOpen(true);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-glow shadow-brand-500/20 transition-all"
+              >
+                <SymbolIcon name="plus.circle" className="w-4 h-4" />
+                <span>Add Existing Devices to this Folder</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setEditingDevice(null);
+                  setIsAddOpen(true);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-glow shadow-brand-500/20 transition-all"
+              >
+                <SymbolIcon name="plus" className="w-4 h-4" />
+                <span>Add Device</span>
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -419,8 +494,13 @@ export const Dashboard: React.FC = () => {
 
       <FolderModal
         isOpen={isFolderOpen}
-        onClose={() => setIsFolderOpen(false)}
+        onClose={() => {
+          setIsFolderOpen(false);
+          setManagingFolder(null);
+        }}
         onSuccess={loadData}
+        folder={managingFolder}
+        devices={devices}
       />
 
       <SearchModal

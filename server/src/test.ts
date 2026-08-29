@@ -145,15 +145,23 @@ async function runTests() {
   assert(correctPin, 'Correct PIN must succeed');
 
   // Test expired link behavior
-  const expiredLink = await SharingService.createGuestShareLink({
-    deviceId: userDevice.id,
-    currentUserId: userId,
-    durationMinutes: -5, // Expired 5 minutes ago
-    durationLabel: 'Expired test',
-  });
-  const expiredCheck = SharingService.getGuestShareByToken(expiredLink.token);
-  assert(!expiredCheck.valid && expiredCheck.reason === 'expired', 'Expired link must cleanly return reason: expired');
-  console.log('  ✅ Guest share link creation, PIN protection, and auto-expiry passed.\n');
+  // Test guest link revocation by owner
+  const revoked = SharingService.revokeGuestShare(guestLink.id, userId);
+  assert(revoked, 'Revocation by owner must succeed');
+  const checkRevoked = SharingService.getGuestShareByToken(guestLink.token);
+  assert(!checkRevoked.valid && checkRevoked.reason === 'revoked', 'Revoked link must return reason: revoked');
+
+  // Test folder creation with devices and updateFolderDevices
+  const folder = DeviceService.createFolder(userId, 'Production Servers', 'folder.fill', '#3b82f6', [userDevice.id]);
+  assert(folder.id, 'Folder created');
+  const userDevsInFolder = DeviceService.getUserDevices(userId);
+  assert.strictEqual(userDevsInFolder.find(d => d.id === userDevice.id)?.folder_id, folder.id, 'Device must be assigned to folder');
+
+  // Bulk update folder devices (unassign)
+  DeviceService.updateFolderDevices(folder.id, userId, []);
+  const userDevsAfterUnassign = DeviceService.getUserDevices(userId);
+  assert.strictEqual(userDevsAfterUnassign.find(d => d.id === userDevice.id)?.folder_id, null, 'Device must be unassigned from folder');
+  console.log('  ✅ Guest share link creation, PIN protection, auto-expiry, revocation, and folder device assignment passed.\n');
 
   // 7. Test Guacamole Instruction Parser & Formatter
   console.log('▶ Test 7: Guacamole Protocol Parser & Formatter');

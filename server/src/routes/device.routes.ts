@@ -192,11 +192,26 @@ router.get('/folders/all', (req: AuthenticatedRequest, res) => {
 router.post('/folders/create', (req: AuthenticatedRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { name, icon, color } = req.body;
+    const { name, icon, color, deviceIds } = req.body;
     if (!name) return res.status(400).json({ error: 'Folder name is required' });
 
-    const folder = DeviceService.createFolder(userId, name, icon, color);
+    const folder = DeviceService.createFolder(userId, name, icon, color, deviceIds);
     res.status(201).json({ folder });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/folders/:id/devices', (req: AuthenticatedRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const { deviceIds } = req.body;
+    if (!Array.isArray(deviceIds)) {
+      return res.status(400).json({ error: 'deviceIds array is required' });
+    }
+
+    DeviceService.updateFolderDevices(req.params.id, userId, deviceIds);
+    res.json({ success: true });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

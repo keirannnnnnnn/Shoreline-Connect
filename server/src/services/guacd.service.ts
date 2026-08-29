@@ -339,6 +339,8 @@ export class GuacdService {
       'height': String(height),
       'dpi': String(dpi),
       'color-depth': String(params.colorDepth || 24),
+      'disable-copy': 'false',
+      'disable-paste': 'false',
       
       // VNC-specific parameters
       'read-only': params.readOnly ? 'true' : 'false',

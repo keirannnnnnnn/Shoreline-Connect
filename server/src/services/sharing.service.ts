@@ -284,9 +284,22 @@ export class SharingService {
    * Revoke guest share link
    */
   static revokeGuestShare(shareId: string, currentUserId: string): boolean {
-    const share = db.prepare('SELECT created_by_user_id FROM guest_shares WHERE id = ?').get(shareId) as { created_by_user_id: string } | undefined;
-    if (!share || share.created_by_user_id !== currentUserId) {
-      throw new Error('Unauthorized or guest link not found');
+    const share = db.prepare(`
+      SELECT gs.id, gs.created_by_user_id, gs.device_id, d.owner_id as device_owner_id
+      FROM guest_shares gs
+      JOIN devices d ON gs.device_id = d.id
+      WHERE gs.id = ?
+    `).get(shareId) as { id: string; created_by_user_id: string; device_id: string; device_owner_id: string } | undefined;
+
+    if (!share) {
+      throw new Error('Guest link not found');
+    }
+
+    const currentUser = db.prepare('SELECT role FROM users WHERE id = ?').get(currentUserId) as { role: string } | undefined;
+    const isAdmin = currentUser?.role === 'admin';
+
+    if (share.created_by_user_id !== currentUserId && share.device_owner_id !== currentUserId && !isAdmin) {
+      throw new Error('Unauthorized to revoke this guest link');
     }
 
     const now = new Date().toISOString();

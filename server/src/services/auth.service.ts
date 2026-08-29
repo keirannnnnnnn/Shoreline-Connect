@@ -87,22 +87,34 @@ export class AuthService {
       throw new Error('Authentication failed');
     }
 
-    // Determine role by AD group membership (exact match against configured group names only)
+    // Determine role by AD group membership (checked fresh on EVERY login)
     const userGroups = authenticatedUser.groups.map(g => g.toLowerCase().trim());
-    let role: 'admin' | 'user' = 'user';
-    
-    const isAdminMember = userGroups.some(g => g === adminGroupName);
-    const isUserMember = userGroups.some(g => g === userGroupName) || isAdminMember;
+    const adminGroups = (adminGroupSetting?.value || config.ad.adminGroup)
+      .split(/[,;]/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    const userGroupsAllowed = (userGroupSetting?.value || config.ad.userGroup)
+      .split(/[,;]/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    const isAdminMember = userGroups.some(g => 
+      adminGroups.includes(g) || adminGroups.some(ag => g.includes(`cn=${ag},`))
+    );
+
+    const isUserMember = userGroups.some(g => 
+      userGroupsAllowed.includes(g) || userGroupsAllowed.some(ug => g.includes(`cn=${ug},`))
+    ) || isAdminMember;
+
+    let role: 'admin' | 'user';
 
     if (isAdminMember) {
       role = 'admin';
     } else if (isUserMember) {
       role = 'user';
     } else {
-      // If user is not member of allowed groups
-      if (!config.devAuthMode) {
-        throw new Error(`Access denied. Account is not a member of authorized AD groups (${adminGroupName} or ${userGroupName}).`);
-      }
+      throw new Error(`Access denied. Account '${authenticatedUser.sAMAccountName}' is not a member of authorized AD groups (${adminGroups.join(', ')} or ${userGroupsAllowed.join(', ')}).`);
     }
 
     // Upsert user in local SQLite database
@@ -209,11 +221,15 @@ export class AuthService {
             const mailVals = getAttr('mail');
             const memberOfVals = getAttr('memberOf');
 
-            const groups = memberOfVals.map((dnStr: string) => {
+            const groups: string[] = [];
+            for (const dnStr of memberOfVals) {
+              groups.push(dnStr);
               // Extract CN from DN, e.g. "CN=Shoreline-Admins,OU=Groups,DC=shoreline,DC=icu" -> "Shoreline-Admins"
               const match = dnStr.match(/^CN=([^,]+)/i);
-              return match ? match[1] : dnStr;
-            });
+              if (match) {
+                groups.push(match[1]);
+              }
+            }
 
             resolve({
               sAMAccountName: sAMAccountName,

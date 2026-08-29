@@ -338,7 +338,7 @@ export class DeviceService {
     return (stmt.all(userId) as unknown) as FolderRecord[];
   }
 
-  static createFolder(userId: string, name: string, icon = 'folder.fill', color = '#3b82f6'): FolderRecord {
+  static createFolder(userId: string, name: string, icon = 'folder.fill', color = '#3b82f6', deviceIds?: string[]): FolderRecord {
     const id = uuidv4();
     const now = new Date().toISOString();
     db.prepare(`
@@ -346,7 +346,36 @@ export class DeviceService {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(id, name.trim(), userId, icon, color, now);
 
+    if (deviceIds && Array.isArray(deviceIds) && deviceIds.length > 0) {
+      const updateStmt = db.prepare('UPDATE devices SET folder_id = ?, updated_at = ? WHERE id = ? AND owner_id = ?');
+      for (const devId of deviceIds) {
+        updateStmt.run(id, now, devId, userId);
+      }
+    }
+
     return (db.prepare('SELECT * FROM folders WHERE id = ?').get(id) as unknown) as FolderRecord;
+  }
+
+  static updateFolderDevices(folderId: string, userId: string, deviceIds: string[]): boolean {
+    const folder = db.prepare('SELECT user_id FROM folders WHERE id = ?').get(folderId) as { user_id: string } | undefined;
+    if (!folder || folder.user_id !== userId) {
+      throw new Error('Folder not found or unauthorized');
+    }
+
+    const now = new Date().toISOString();
+
+    // 1. Remove folder assignment from devices currently in this folder that are not in the new list
+    db.prepare('UPDATE devices SET folder_id = NULL, updated_at = ? WHERE folder_id = ? AND owner_id = ?').run(now, folderId, userId);
+
+    // 2. Assign specified devices to this folder
+    if (deviceIds && Array.isArray(deviceIds) && deviceIds.length > 0) {
+      const assignStmt = db.prepare('UPDATE devices SET folder_id = ?, updated_at = ? WHERE id = ? AND owner_id = ?');
+      for (const devId of deviceIds) {
+        assignStmt.run(folderId, now, devId, userId);
+      }
+    }
+
+    return true;
   }
 
   static deleteFolder(folderId: string, userId: string): boolean {
@@ -355,6 +384,8 @@ export class DeviceService {
       throw new Error('Folder not found or unauthorized');
     }
 
+    // Move devices out of folder before deleting
+    db.prepare('UPDATE devices SET folder_id = NULL WHERE folder_id = ?').run(folderId);
     db.prepare('DELETE FROM folders WHERE id = ?').run(folderId);
     return true;
   }

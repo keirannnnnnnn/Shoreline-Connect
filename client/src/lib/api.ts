@@ -72,10 +72,15 @@ export const api = {
 
   folders: {
     getAll: () => fetchJson<{ folders: Folder[] }>('/devices/folders/all'),
-    create: (data: { name: string; icon?: string; color?: string }) =>
+    create: (data: { name: string; icon?: string; color?: string; deviceIds?: string[] }) =>
       fetchJson<{ folder: Folder }>('/devices/folders/create', {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+    updateDevices: (folderId: string, deviceIds: string[]) =>
+      fetchJson<{ success: boolean }>('/devices/folders/' + folderId + '/devices', {
+        method: 'POST',
+        body: JSON.stringify({ deviceIds }),
       }),
     delete: (id: string) => fetchJson<{ success: boolean }>('/devices/folders/' + id, { method: 'DELETE' }),
   },
@@ -113,11 +118,16 @@ export const api = {
   admin: {
     getSettings: () => fetchJson<{ settings: SystemSettings }>('/admin/settings'),
     updateSettings: (settings: Partial<SystemSettings>) =>
-      fetchJson<{ success: boolean }>('/admin/settings', {
+      fetchJson<{ success: boolean; message: string }>('/admin/settings', {
         method: 'PUT',
         body: JSON.stringify({ settings }),
       }),
     getUsers: () => fetchJson<{ users: User[] }>('/admin/users'),
+    updateUserRole: (userId: string, role: 'admin' | 'user') =>
+      fetchJson<{ success: boolean; message: string }>('/admin/users/' + userId + '/role', {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      }),
     getUserDevices: (targetUserId: string) =>
       fetchJson<{ devices: Device[] }>('/admin/users/' + targetUserId + '/devices'),
     getSessionLogs: (params?: any) => {
