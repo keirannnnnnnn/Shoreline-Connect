@@ -115,7 +115,7 @@ export class AuthService {
         canAccess = true;
       } else {
         const requiredGroups = configuredGroup.split(/[,;]/).map(s => s.trim()).filter(Boolean);
-        canAccess = userGroups.some(g =>
+        canAccess = isGlobalAdmin || userGroups.some(g =>
           requiredGroups.some(rg => this.checkGroupMatch(g, rg))
         );
       }

@@ -209,10 +209,10 @@ export function initDatabase() {
   insertSetting.run('ad_base_dn', config.ad.baseDn);
   insertSetting.run('ad_admin_group', config.ad.adminGroup);
   insertSetting.run('ad_user_group', config.ad.userGroup);
-  insertSetting.run('tab_group_devices', process.env.TAB_GROUP_DEVICES || config.ad.userGroup || '');
-  insertSetting.run('tab_group_monitoring', process.env.TAB_GROUP_MONITORING || config.ad.userGroup || '');
-  insertSetting.run('tab_group_tracking', process.env.TAB_GROUP_TRACKING || config.ad.userGroup || '');
-  insertSetting.run('tab_group_cloud', process.env.TAB_GROUP_CLOUD || config.ad.userGroup || '');
+  insertSetting.run('tab_group_devices', process.env.TAB_GROUP_DEVICES || '');
+  insertSetting.run('tab_group_monitoring', process.env.TAB_GROUP_MONITORING || '');
+  insertSetting.run('tab_group_tracking', process.env.TAB_GROUP_TRACKING || '');
+  insertSetting.run('tab_group_cloud', process.env.TAB_GROUP_CLOUD || '');
   insertSetting.run('git_repo_url', config.git.repoUrl);
   insertSetting.run('git_branch', config.git.branch);
   insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');

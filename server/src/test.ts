@@ -369,6 +369,13 @@ async function runTests() {
   assert(restoredDevice && restoredDevice.name === 'Restored Server', 'Device must be restored');
   console.log('  ✅ Data backup export and restore verification passed.\n');
 
+  // Cleanup test mutations from DB so live system remains untouched
+  db.prepare("DELETE FROM users WHERE id LIKE 'test-%'").run();
+  db.prepare("DELETE FROM devices WHERE id LIKE '%test%'").run();
+  db.prepare("DELETE FROM folders WHERE id LIKE '%test%'").run();
+  db.prepare("UPDATE system_settings SET value = '' WHERE key IN ('tab_group_devices', 'tab_group_monitoring', 'tab_group_tracking', 'tab_group_cloud')").run();
+  db.prepare("UPDATE system_settings SET value = 'Shoreline-Admins' WHERE key = 'ad_admin_group'").run();
+
   console.log('🎉 ALL BACKEND TESTS PASSED SUCCESSFULLY!\n');
 }
 
