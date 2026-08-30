@@ -23,11 +23,13 @@ import { cloudRouter } from './routes/cloud.routes.js';
 import { backupRouter } from './routes/backup.routes.js';
 import { MonitoringService } from './services/monitoring.service.js';
 import { TrackingService } from './services/tracking.service.js';
+import { CloudService } from './services/cloud.service.js';
 
 // 1. Initialize SQLite Database & Background Jobs
 initDatabase();
 MonitoringService.startBackgroundJob();
 TrackingService.startBackgroundJob();
+CloudService.startBackgroundJob();
 
 // 2. Setup Express application
 const app = express();

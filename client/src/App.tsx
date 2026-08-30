@@ -11,6 +11,7 @@ import { Monitoring } from './pages/Monitoring.js';
 import { MonitoringDetail } from './pages/MonitoringDetail.js';
 import { Tracking } from './pages/Tracking.js';
 import { Cloud } from './pages/Cloud.js';
+import { PublicCloudShare } from './pages/PublicCloudShare.js';
 import { AccessDenied } from './components/AccessDenied.js';
 import { SymbolIcon } from './components/SymbolIcon.js';
 
@@ -116,6 +117,7 @@ export const App: React.FC = () => {
           />
           <Route path="/session/guest" element={<SessionViewer />} />
           <Route path="/guest/:token" element={<GuestJoin />} />
+          <Route path="/share/cloud/:token" element={<PublicCloudShare />} />
 
           {/* 7. Settings & Administration */}
           <Route

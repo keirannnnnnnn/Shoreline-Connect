@@ -297,6 +297,47 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_osm_speed_grid ON osm_speed_limits_cache(lat_grid, lng_grid);
+
+    /* --- Build 3: Cloud Storage Schema --- */
+    CREATE TABLE IF NOT EXISTS cloud_shares (
+      id TEXT PRIMARY KEY,
+      token TEXT UNIQUE NOT NULL,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      share_type TEXT NOT NULL CHECK (share_type IN ('permanent', 'quick_link')),
+      virtual_path TEXT,
+      temp_filename TEXT,
+      original_filename TEXT NOT NULL,
+      file_size_bytes INTEGER DEFAULT 0,
+      mime_type TEXT DEFAULT 'application/octet-stream',
+      pin_hash TEXT,
+      expires_at INTEGER,
+      revoked_at INTEGER,
+      download_count INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cloud_shares_token ON cloud_shares(token);
+    CREATE INDEX IF NOT EXISTS idx_cloud_shares_user ON cloud_shares(user_id);
+
+    CREATE TABLE IF NOT EXISTS cloud_quick_link_audit (
+      id TEXT PRIMARY KEY,
+      share_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      file_size_bytes INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER,
+      had_pin INTEGER DEFAULT 0,
+      outcome TEXT DEFAULT 'active' CHECK (outcome IN ('active', 'expired', 'revoked')),
+      revoked_at INTEGER,
+      download_count INTEGER DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cloud_audit_user ON cloud_quick_link_audit(user_id);
+    CREATE INDEX IF NOT EXISTS idx_cloud_audit_share ON cloud_quick_link_audit(share_id);
   `);
 
   // Initialize default settings if not exists
@@ -315,6 +356,7 @@ export function initDatabase() {
   insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');
   insertSetting.run('tracking_map_provider', 'leaflet');
   insertSetting.run('google_maps_api_key', '');
+  insertSetting.run('cloud_storage_base_path', '');
 
   console.log('✅ SQLite Database initialized at:', dbPath);
 }

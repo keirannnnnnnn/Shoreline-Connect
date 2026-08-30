@@ -6,8 +6,11 @@ import { SharingService } from './services/sharing.service.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { GuacdService } from './services/guacd.service.js';
+import fs from 'fs';
+import path from 'path';
 import { MonitoringService } from './services/monitoring.service.js';
 import { TrackingService } from './services/tracking.service.js';
+import { CloudService } from './services/cloud.service.js';
 
 async function runTests() {
   console.log('🧪 Starting Shoreline Connect Automated Backend Tests...\n');
@@ -435,13 +438,146 @@ async function runTests() {
   TrackingService.runRetentionJob();
   console.log('  ✅ Tracked items, Bearer auth, ingestion, journey detection & speed limit cache verified.\n');
 
+  // 14. Test Build 3 Cloud Subsystem
+  console.log('▶ Test 14: Build 3 Cloud Storage & Quick Link Engine');
+
+  // Base path & user directory isolation
+  const baseCloudDir = CloudService.getBasePath();
+  assert(baseCloudDir, 'Must resolve base cloud directory');
+  CloudService.ensureUserDirs('keiran.griffiths');
+  CloudService.ensureUserDirs('john.doe');
+
+  const keiranFilesDir = CloudService.getUserFilesDir('keiran.griffiths');
+  const keiranTempDir = CloudService.getUserTempDir('keiran.griffiths');
+  assert(fs.existsSync(keiranFilesDir), 'User files directory must exist');
+  assert(fs.existsSync(keiranTempDir), 'User temp directory must exist');
+
+  // Safe path traversal defense
+  const traversalAttempt = CloudService.safeResolvePath(keiranFilesDir, '../../../../etc/passwd');
+  assert.strictEqual(traversalAttempt, null, 'Directory traversal must be rejected');
+
+  // Folder creation, nesting, and listing
+  const testProjectsDir = path.join(keiranFilesDir, 'Projects');
+  if (fs.existsSync(testProjectsDir)) {
+    fs.rmSync(testProjectsDir, { recursive: true, force: true });
+  }
+  CloudService.createFolder('keiran.griffiths', 'Projects/2026');
+  const projectItems = CloudService.listDirectory('keiran.griffiths', 'Projects');
+  assert.strictEqual(projectItems.length, 1, 'Projects directory must contain 1 folder');
+  assert.strictEqual(projectItems[0].name, '2026');
+  assert.strictEqual(projectItems[0].type, 'folder');
+
+  // Create sample test file in permanent directory
+  const sampleFilePath = path.join(keiranFilesDir, 'Projects', '2026', 'specs.txt');
+  fs.writeFileSync(sampleFilePath, 'Shoreline Connect Build 3 Specifications Document', 'utf8');
+
+  const filesIn2026 = CloudService.listDirectory('keiran.griffiths', 'Projects/2026');
+  assert.strictEqual(filesIn2026.length, 1, '2026 folder must contain specs.txt');
+  assert.strictEqual(filesIn2026[0].name, 'specs.txt');
+  assert.strictEqual(filesIn2026[0].type, 'file');
+  assert(filesIn2026[0].size_bytes! > 10, 'Size must be computed correctly');
+
+  // Rename item
+  CloudService.renameItem('keiran.griffiths', 'Projects/2026/specs.txt', 'final_specs.txt');
+  const renamedFiles = CloudService.listDirectory('keiran.griffiths', 'Projects/2026');
+  assert.strictEqual(renamedFiles[0].name, 'final_specs.txt');
+
+  // Move item
+  CloudService.moveItem('keiran.griffiths', 'Projects/2026/final_specs.txt', 'Projects');
+  const movedFiles = CloudService.listDirectory('keiran.griffiths', 'Projects');
+  const movedFile = movedFiles.find((f) => f.name === 'final_specs.txt');
+  assert(movedFile, 'final_specs.txt must have moved to Projects directory');
+
+  // Permanent file share link generation
+  const permShare = CloudService.createPermanentShare(
+    { id: adminId, username: 'keiran.griffiths' },
+    'Projects/final_specs.txt',
+    { pinPlaintext: '1234', expiresInSeconds: null }
+  );
+  assert(permShare.token.startsWith('sh_cld_'), 'Must generate sh_cld_ token');
+  assert.strictEqual(permShare.expiresAt, null, 'Permanent share has no expiration');
+
+  const shareInfo = CloudService.getPublicShare(permShare.token);
+  assert(shareInfo, 'Public share must be retrievable');
+  assert.strictEqual(shareInfo.has_pin, true, 'Share must be marked as PIN-protected');
+  assert.strictEqual(CloudService.verifySharePin(shareInfo, '1234'), true, 'Valid PIN must verify');
+  assert.strictEqual(CloudService.verifySharePin(shareInfo, '9999'), false, 'Invalid PIN must fail');
+
+  // Revoking permanent share link does NOT delete the underlying file on disk
+  CloudService.revokeShare(permShare.shareId, adminId, true);
+  const remainingFileCheck = CloudService.listDirectory('keiran.griffiths', 'Projects');
+  assert(
+    remainingFileCheck.some((f) => f.name === 'final_specs.txt'),
+    'Underlying permanent file must remain on disk after share revocation'
+  );
+
+  // Quick Link temporary file share & audit test
+  const tempTestFileName = 'test_quick_upload.zip';
+  const tempTestFilePath = path.join(keiranTempDir, tempTestFileName);
+  fs.writeFileSync(tempTestFilePath, 'ZIP_CONTENT_BYTES_DUMMY', 'utf8');
+
+  const quickShareId = 'test-quick-share-1';
+  const quickToken = 'sh_cld_test_quick_token';
+  db.prepare(`
+    INSERT INTO cloud_shares (
+      id, token, user_id, username, share_type, virtual_path, temp_filename,
+      original_filename, file_size_bytes, mime_type, pin_hash, expires_at,
+      download_count, created_at
+    ) VALUES (?, ?, ?, ?, 'quick_link', NULL, ?, ?, ?, 'application/zip', NULL, ?, 0, ?)
+  `).run(
+    quickShareId,
+    quickToken,
+    adminId,
+    'keiran.griffiths',
+    tempTestFileName,
+    'project.zip',
+    1024,
+    Math.floor(Date.now() / 1000) + 3600,
+    Math.floor(Date.now() / 1000)
+  );
+
+  db.prepare(`
+    INSERT INTO cloud_quick_link_audit (
+      id, share_id, user_id, username, filename, file_size_bytes,
+      created_at, expires_at, had_pin, outcome, download_count
+    ) VALUES ('test-audit-1', ?, ?, 'keiran.griffiths', 'project.zip', 1024, ?, ?, 0, 'active', 0)
+  `).run(quickShareId, adminId, Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000) + 3600);
+
+  const quickShareInfo = CloudService.getPublicShare(quickToken);
+  assert(quickShareInfo, 'Quick link share must be retrievable');
+
+  // Revoking Quick Link MUST delete the underlying temporary file from disk
+  CloudService.revokeShare(quickShareId, adminId, true);
+  assert.strictEqual(
+    fs.existsSync(tempTestFilePath),
+    false,
+    'Temporary Quick Link file MUST be deleted from disk upon revocation'
+  );
+
+  // Audit trail verification
+  const cloudAuditList = CloudService.getAuditLogs(adminId, true);
+  const auditedEntry = cloudAuditList.find((l: any) => l.share_id === quickShareId);
+  assert(auditedEntry, 'Audit log must persist even after file is deleted');
+  assert.strictEqual(auditedEntry.outcome, 'revoked', 'Audit record outcome must update to revoked');
+
+  // Multi-tenant isolation test: john.doe cannot access keiran's files
+  const johnFiles = CloudService.listDirectory('john.doe', '');
+  assert.strictEqual(johnFiles.length, 0, 'John Doe must have an empty isolated files space');
+
+  console.log('  ✅ Cloud personal drive, folder ops, zero-memory streams, sharing, audit & isolation verified.\n');
+
   // Cleanup test mutations from DB so live system remains untouched
   db.prepare("DELETE FROM users WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM devices WHERE id LIKE '%test%'").run();
   db.prepare("DELETE FROM folders WHERE id LIKE '%test%'").run();
   db.prepare("DELETE FROM tracked_items WHERE user_id = ? OR id = ?").run(userId, testVehicle.id);
+  db.prepare("DELETE FROM cloud_shares WHERE id LIKE 'test-%'").run();
+  db.prepare("DELETE FROM cloud_quick_link_audit WHERE id LIKE 'test-%'").run();
   db.prepare("UPDATE system_settings SET value = '' WHERE key IN ('tab_group_devices', 'tab_group_monitoring', 'tab_group_tracking', 'tab_group_cloud')").run();
   db.prepare("UPDATE system_settings SET value = 'Shoreline-Admins' WHERE key = 'ad_admin_group'").run();
+  if (fs.existsSync(testProjectsDir)) {
+    fs.rmSync(testProjectsDir, { recursive: true, force: true });
+  }
 
   console.log('🎉 ALL BACKEND TESTS PASSED SUCCESSFULLY!\n');
 }

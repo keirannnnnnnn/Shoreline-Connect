@@ -230,3 +230,50 @@ export interface TrackingSettings {
   googleMapsApiKey: string;
   hasGoogleMapsKey: boolean;
 }
+
+export interface CloudItem {
+  name: string;
+  type: 'file' | 'folder';
+  size_bytes: number | null;
+  modified_at: string;
+  mime_type: string | null;
+  path: string;
+}
+
+export interface CloudShare {
+  id: string;
+  token: string;
+  user_id: string;
+  username: string;
+  share_type: 'permanent' | 'quick_link';
+  virtual_path: string | null;
+  temp_filename: string | null;
+  original_filename: string;
+  file_size_bytes: number;
+  mime_type: string;
+  expires_at: number | null;
+  revoked_at: number | null;
+  download_count: number;
+  created_at: number;
+}
+
+export interface QuickLinkAuditRecord {
+  id: string;
+  share_id: string;
+  user_id: string;
+  username: string;
+  filename: string;
+  file_size_bytes: number;
+  created_at: number;
+  expires_at: number | null;
+  had_pin: number;
+  outcome: 'active' | 'expired' | 'revoked';
+  revoked_at: number | null;
+  download_count: number;
+}
+
+export interface CloudSettings {
+  basePath: string;
+  configuredPath?: string;
+}
+

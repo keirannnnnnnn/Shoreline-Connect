@@ -1,4 +1,4 @@
-import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings } from '../types/index.js';
+import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings } from '../types/index.js';
 
 const API_BASE = '/api';
 
@@ -220,8 +220,131 @@ export const api = {
   },
 
   cloud: {
-    getStatus: () => fetchJson<{ enabled: boolean; feature: string; scaffold: boolean; message: string }>('/cloud/status'),
-    getFiles: () => fetchJson<{ files: any[]; storageUsedBytes: number; storageQuotaBytes: number }>('/cloud/files'),
+    getFiles: (path?: string) =>
+      fetchJson<{ items: CloudItem[]; currentPath: string }>(`/cloud/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+    createFolder: (path: string) =>
+      fetchJson<{ success: boolean; path: string }>('/cloud/folder', {
+        method: 'POST',
+        body: JSON.stringify({ path }),
+      }),
+    uploadFile: (path: string, file: File, onProgress?: (pct: number) => void): Promise<{ success: boolean; file: any }> => {
+      return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/api/cloud/upload${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+        xhr.withCredentials = true;
+        if (onProgress) {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+          };
+        }
+        xhr.onload = () => {
+          try {
+            const d = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300) resolve(d);
+            else reject(new Error(d.error || 'Upload failed'));
+          } catch {
+            reject(new Error('Upload failed'));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Upload failed'));
+        xhr.send(formData);
+      });
+    },
+    uploadQuickLink: (
+      file: File,
+      options: { expiresInSeconds: number | null; pin?: string },
+      onProgress?: (pct: number) => void
+    ): Promise<{ success: boolean; shareId: string; token: string; filename: string; sizeBytes: number; expiresAt: number | null }> => {
+      return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const queryParams = new URLSearchParams();
+        if (options.expiresInSeconds !== null) queryParams.set('expiresInSeconds', String(options.expiresInSeconds));
+        if (options.pin) queryParams.set('pin', options.pin);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/api/cloud/quick-link/upload?${queryParams.toString()}`);
+        xhr.withCredentials = true;
+        if (onProgress) {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+          };
+        }
+        xhr.onload = () => {
+          try {
+            const d = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300) resolve(d);
+            else reject(new Error(d.error || 'Upload failed'));
+          } catch {
+            reject(new Error('Upload failed'));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Upload failed'));
+        xhr.send(formData);
+      });
+    },
+    renameItem: (path: string, newName: string) =>
+      fetchJson<{ success: boolean }>('/cloud/rename', {
+        method: 'PUT',
+        body: JSON.stringify({ path, newName }),
+      }),
+    moveItem: (src: string, dest: string) =>
+      fetchJson<{ success: boolean }>('/cloud/move', {
+        method: 'PUT',
+        body: JSON.stringify({ src, dest }),
+      }),
+    deleteItem: (path: string) =>
+      fetchJson<{ success: boolean }>('/cloud/item', {
+        method: 'DELETE',
+        body: JSON.stringify({ path }),
+      }),
+    downloadFile: (path: string) => {
+      window.open(`/api/cloud/download?path=${encodeURIComponent(path)}`, '_blank');
+    },
+    getShares: () =>
+      fetchJson<{ shares: CloudShare[] }>('/cloud/shares'),
+    createPermanentShare: (path: string, options: { pin?: string; expiresInSeconds?: number | null }) =>
+      fetchJson<{ success: boolean; shareId: string; token: string; expiresAt: number | null }>('/cloud/shares', {
+        method: 'POST',
+        body: JSON.stringify({ path, pin: options.pin, expiresInSeconds: options.expiresInSeconds }),
+      }),
+    revokeShare: (id: string) =>
+      fetchJson<{ success: boolean }>(`/cloud/shares/${id}`, {
+        method: 'DELETE',
+      }),
+    getAuditLogs: () =>
+      fetchJson<{ logs: QuickLinkAuditRecord[] }>('/cloud/audit'),
+    getSettings: () =>
+      fetchJson<CloudSettings>('/cloud/settings'),
+    saveSettings: (basePath: string) =>
+      fetchJson<{ success: boolean; basePath: string }>('/cloud/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ basePath }),
+      }),
+    getPublicShareInfo: (token: string) =>
+      fetch(`/api/cloud/public/share/${encodeURIComponent(token)}`).then(async (r) => {
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: 'Invalid or expired share' }));
+          throw new Error(err.error || 'Failed to load share');
+        }
+        return r.json();
+      }),
+    verifyPublicPin: (token: string, pin: string) =>
+      fetch(`/api/cloud/public/share/${encodeURIComponent(token)}/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+      }).then(async (r) => {
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: 'Incorrect PIN' }));
+          throw new Error(err.error || 'Incorrect PIN');
+        }
+        return r.json();
+      }),
+    getPublicDownloadUrl: (token: string, pin?: string) =>
+      `/api/cloud/public/share/${encodeURIComponent(token)}/download${pin ? `?pin=${encodeURIComponent(pin)}` : ''}`,
   },
 
   backup: {

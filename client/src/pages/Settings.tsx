@@ -70,6 +70,12 @@ export const Settings: React.FC = () => {
   const [updateLogs, setUpdateLogs] = useState<string | null>(null);
   const [restartingCountdown, setRestartingCountdown] = useState<number | null>(null);
 
+  // Admin: Cloud Storage Settings
+  const [cloudBasePath, setCloudBasePath] = useState<string>('');
+  const [cloudSaveStatus, setCloudSaveStatus] = useState<string | null>(null);
+  const [isSavingCloud, setIsSavingCloud] = useState(false);
+  const [cloudAuditLogs, setCloudAuditLogs] = useState<any[]>([]);
+
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -132,8 +138,32 @@ export const Settings: React.FC = () => {
       setAuditLogs(logsRes.logs);
       setAuditTotal(logsRes.total);
       setUpdateStatus(updateRes.status);
+
+      // Also load cloud settings + audit (admin only)
+      try {
+        const [cloudSettingsRes, cloudAuditRes] = await Promise.all([
+          (api.cloud as any).getSettings(),
+          (api.cloud as any).getAuditLogs(),
+        ]);
+        setCloudBasePath(cloudSettingsRes.basePath || '');
+        setCloudAuditLogs(cloudAuditRes.logs || []);
+      } catch { /* cloud may not exist yet - gracefully ignore */ }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleSaveCloudSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingCloud(true);
+    setCloudSaveStatus(null);
+    try {
+      await (api.cloud as any).saveSettings(cloudBasePath);
+      setCloudSaveStatus('Cloud storage settings saved successfully.');
+    } catch (err: any) {
+      setCloudSaveStatus(`Error: ${err.message}`);
+    } finally {
+      setIsSavingCloud(false);
     }
   };
 
@@ -450,6 +480,18 @@ export const Settings: React.FC = () => {
                 >
                   <SymbolIcon name="arrow.trianglehead.2.clockwise.rotate.90" className="w-4 h-4 text-purple-400" />
                   <span>Self-Update System</span>
+                </button>
+
+                <button
+                  onClick={() => handleTabChange('cloud-admin')}
+                  className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all text-left ${
+                    activeTab === 'cloud-admin'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                      : 'text-slate-400 hover:text-purple-300 hover:bg-purple-500/10'
+                  }`}
+                >
+                  <SymbolIcon name="cloud.fill" className="w-4 h-4 text-purple-400" />
+                  <span>Cloud Storage</span>
                 </button>
               </div>
             )}
@@ -1400,6 +1442,118 @@ export const Settings: React.FC = () => {
                       <span>Copy</span>
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* CLOUD STORAGE ADMIN */}
+            {isAdmin && activeTab === 'cloud-admin' && (
+              <div className="space-y-6">
+                {/* Base Path Config */}
+                <div className="rounded-3xl bg-surface-card border border-surface-border p-6 space-y-5">
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <SymbolIcon name="cloud.fill" className="w-5 h-5 text-cyan-400" />
+                      <span>Cloud Storage Configuration</span>
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      Set the base path where all user files are stored. Changes apply to new uploads immediately. Existing files at the old path are not moved automatically.
+                    </p>
+                  </div>
+
+                  {cloudSaveStatus && (
+                    <div className="p-3.5 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-300 text-xs">
+                      {cloudSaveStatus}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSaveCloudSettings} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                        Storage Base Path
+                      </label>
+                      <input
+                        type="text"
+                        value={cloudBasePath}
+                        onChange={(e) => setCloudBasePath(e.target.value)}
+                        placeholder="Leave empty to use default: <app>/data/cloud"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-sm font-mono focus:ring-1 focus:ring-cyan-500 focus:outline-none placeholder:text-slate-600"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
+                        Examples: <code className="text-slate-300 font-mono">D:\Shoreline Connect\Files</code> (Windows) or <code className="text-slate-300 font-mono">/mnt/storage/shoreline</code> (Linux / Docker volume). Leave blank to use the default path inside the container.
+                      </p>
+                    </div>
+
+                    <div className="p-3 bg-surface rounded-xl border border-surface-border">
+                      <p className="text-[11px] text-slate-400">
+                        Files will be stored at: <code className="text-cyan-300 font-mono">{cloudBasePath || '<app>/data/cloud'}/Users/&lt;username&gt;/files/</code>
+                        <br />Temp Quick Link files: <code className="text-cyan-300 font-mono">{cloudBasePath || '<app>/data/cloud'}/Users/&lt;username&gt;/temp/</code>
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSavingCloud}
+                      className="py-2.5 px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold shadow-glow shadow-cyan-500/20 transition-all flex items-center gap-2"
+                    >
+                      <SymbolIcon name="checkmark.circle.fill" className="w-4 h-4" />
+                      <span>{isSavingCloud ? 'Saving...' : 'Save Storage Path'}</span>
+                    </button>
+                  </form>
+                </div>
+
+                {/* Quick Link Audit Trail */}
+                <div className="rounded-3xl bg-surface-card border border-surface-border p-6 space-y-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <SymbolIcon name="clock.arrow.circlepath" className="w-4 h-4 text-cyan-400" />
+                      <span>Quick Link Activity Audit Trail</span>
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Persistent history of all Quick Link uploads. Records remain even after links expire or files are deleted.
+                    </p>
+                  </div>
+
+                  {cloudAuditLogs.length === 0 ? (
+                    <div className="text-center py-8 text-xs text-slate-500">No Quick Link activity recorded yet.</div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-surface-border">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-surface-border bg-surface/60">
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">User</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">Filename</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">Size</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">Created</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">Expires</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">PIN</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">Downloads</th>
+                            <th className="text-left px-4 py-2.5 text-slate-400 font-semibold">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cloudAuditLogs.map((log: any) => (
+                            <tr key={log.id} className="border-b border-surface-border/50 hover:bg-surface/40">
+                              <td className="px-4 py-2.5 font-mono text-slate-300">{log.username}</td>
+                              <td className="px-4 py-2.5 text-slate-200 max-w-[200px] truncate" title={log.filename}>{log.filename}</td>
+                              <td className="px-4 py-2.5 text-slate-400">{log.file_size_bytes > 0 ? (log.file_size_bytes < 1048576 ? `${(log.file_size_bytes / 1024).toFixed(1)} KB` : `${(log.file_size_bytes / 1048576).toFixed(1)} MB`) : '—'}</td>
+                              <td className="px-4 py-2.5 text-slate-400">{new Date(log.created_at * 1000).toLocaleString()}</td>
+                              <td className="px-4 py-2.5 text-slate-400">{log.expires_at ? new Date(log.expires_at * 1000).toLocaleString() : 'Never'}</td>
+                              <td className="px-4 py-2.5">{log.had_pin ? <span className="text-amber-400">🔒 Yes</span> : <span className="text-slate-500">No</span>}</td>
+                              <td className="px-4 py-2.5 text-slate-300">{log.download_count}</td>
+                              <td className="px-4 py-2.5">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                  log.outcome === 'active' ? 'bg-emerald-500/15 text-emerald-400' :
+                                  log.outcome === 'expired' ? 'bg-slate-500/15 text-slate-400' :
+                                  'bg-red-500/15 text-red-400'
+                                }`}>{log.outcome}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
