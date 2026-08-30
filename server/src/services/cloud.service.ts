@@ -348,6 +348,19 @@ export class CloudService {
       const busboy = Busboy({ headers: req.headers });
       let uploadedFile: { filename: string; path: string; sizeBytes: number; mimeType: string } | null = null;
       let fieldRelativePath = subRelativePath;
+      let pendingWrites = 0;
+      let busboyFinished = false;
+      let hasError = false;
+
+      const checkComplete = () => {
+        if (hasError) return;
+        if (busboyFinished && pendingWrites === 0) {
+          if (!uploadedFile) {
+            return reject(new Error('No file received in request'));
+          }
+          resolve(uploadedFile);
+        }
+      };
 
       busboy.on('field', (name, val) => {
         if (name === 'relativePath' && val) {
@@ -356,6 +369,7 @@ export class CloudService {
       });
 
       busboy.on('file', (_name, fileStream, info) => {
+        pendingWrites++;
         let finalDir = destDir;
         let finalFileName = path.basename(info.filename);
 
@@ -391,6 +405,7 @@ export class CloudService {
         fileStream.pipe(writeStream);
 
         writeStream.on('finish', () => {
+          pendingWrites--;
           const relPath = path.relative(baseFilesDir, finalPath).replace(/\\/g, '/');
           uploadedFile = {
             filename: path.basename(finalPath),
@@ -398,22 +413,29 @@ export class CloudService {
             sizeBytes,
             mimeType: info.mimeType || getMimeType(finalPath),
           };
+          checkComplete();
         });
 
         writeStream.on('error', (err) => {
+          hasError = true;
+          pendingWrites--;
           reject(err);
         });
       });
 
       busboy.on('error', (err) => {
+        hasError = true;
         reject(err);
       });
 
       busboy.on('finish', () => {
-        if (!uploadedFile) {
-          return reject(new Error('No file received in request'));
-        }
-        resolve(uploadedFile);
+        busboyFinished = true;
+        checkComplete();
+      });
+
+      busboy.on('close', () => {
+        busboyFinished = true;
+        checkComplete();
       });
 
       req.pipe(busboy);
@@ -433,6 +455,70 @@ export class CloudService {
       let fileData: { tempFilename: string; origFilename: string; sizeBytes: number; mimeType: string } | null = null;
       let formExpiry = options.expiresInSeconds;
       let formPin = options.pinPlaintext;
+      let pendingWrites = 0;
+      let busboyFinished = false;
+      let hasError = false;
+
+      const checkComplete = () => {
+        if (hasError) return;
+        if (busboyFinished && pendingWrites === 0) {
+          if (!fileData) {
+            return reject(new Error('No file uploaded'));
+          }
+
+          const now = Math.floor(Date.now() / 1000);
+          const expiresAt = formExpiry ? now + formExpiry : null;
+          const shareId = crypto.randomUUID();
+          const token = 'sh_cld_' + crypto.randomBytes(20).toString('hex');
+          const pinHash = formPin && formPin.trim().length > 0 ? bcrypt.hashSync(formPin.trim(), 10) : null;
+
+          db.prepare(`
+            INSERT INTO cloud_shares (
+              id, token, user_id, username, share_type, virtual_path, temp_filename,
+              original_filename, file_size_bytes, mime_type, pin_hash, expires_at,
+              download_count, created_at
+            ) VALUES (?, ?, ?, ?, 'quick_link', NULL, ?, ?, ?, ?, ?, ?, 0, ?)
+          `).run(
+            shareId,
+            token,
+            user.id,
+            user.username,
+            fileData.tempFilename,
+            fileData.origFilename,
+            fileData.sizeBytes,
+            fileData.mimeType,
+            pinHash,
+            expiresAt,
+            now
+          );
+
+          const auditId = crypto.randomUUID();
+          db.prepare(`
+            INSERT INTO cloud_quick_link_audit (
+              id, share_id, user_id, username, filename, file_size_bytes,
+              created_at, expires_at, had_pin, outcome, download_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
+          `).run(
+            auditId,
+            shareId,
+            user.id,
+            user.username,
+            fileData.origFilename,
+            fileData.sizeBytes,
+            now,
+            expiresAt,
+            pinHash ? 1 : 0
+          );
+
+          resolve({
+            shareId,
+            token,
+            filename: fileData.origFilename,
+            sizeBytes: fileData.sizeBytes,
+            expiresAt,
+          });
+        }
+      };
 
       busboy.on('field', (name, val) => {
         if (name === 'expiresInSeconds' && val) {
@@ -444,6 +530,7 @@ export class CloudService {
       });
 
       busboy.on('file', (_name, fileStream, info) => {
+        pendingWrites++;
         const origFilename = path.basename(info.filename);
         const randomPrefix = crypto.randomBytes(8).toString('hex');
         const safeName = `${randomPrefix}_${origFilename.replace(/[<>:"/\\|?*]/g, '_')}`;
@@ -459,79 +546,36 @@ export class CloudService {
         fileStream.pipe(writeStream);
 
         writeStream.on('finish', () => {
+          pendingWrites--;
           fileData = {
             tempFilename: safeName,
             origFilename,
             sizeBytes,
             mimeType: info.mimeType || getMimeType(origFilename),
           };
+          checkComplete();
         });
 
         writeStream.on('error', (err) => {
+          hasError = true;
+          pendingWrites--;
           reject(err);
         });
       });
 
       busboy.on('error', (err) => {
+        hasError = true;
         reject(err);
       });
 
       busboy.on('finish', () => {
-        if (!fileData) {
-          return reject(new Error('No file uploaded'));
-        }
+        busboyFinished = true;
+        checkComplete();
+      });
 
-        const now = Math.floor(Date.now() / 1000);
-        const expiresAt = formExpiry ? now + formExpiry : null;
-        const shareId = crypto.randomUUID();
-        const token = 'sh_cld_' + crypto.randomBytes(20).toString('hex');
-        const pinHash = formPin && formPin.trim().length > 0 ? bcrypt.hashSync(formPin.trim(), 10) : null;
-
-        db.prepare(`
-          INSERT INTO cloud_shares (
-            id, token, user_id, username, share_type, virtual_path, temp_filename,
-            original_filename, file_size_bytes, mime_type, pin_hash, expires_at,
-            download_count, created_at
-          ) VALUES (?, ?, ?, ?, 'quick_link', NULL, ?, ?, ?, ?, ?, ?, 0, ?)
-        `).run(
-          shareId,
-          token,
-          user.id,
-          user.username,
-          fileData.tempFilename,
-          fileData.origFilename,
-          fileData.sizeBytes,
-          fileData.mimeType,
-          pinHash,
-          expiresAt,
-          now
-        );
-
-        const auditId = crypto.randomUUID();
-        db.prepare(`
-          INSERT INTO cloud_quick_link_audit (
-            id, share_id, user_id, username, filename, file_size_bytes,
-            created_at, expires_at, had_pin, outcome, download_count
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0)
-        `).run(
-          auditId,
-          shareId,
-          user.id,
-          user.username,
-          fileData.origFilename,
-          fileData.sizeBytes,
-          now,
-          expiresAt,
-          pinHash ? 1 : 0
-        );
-
-        resolve({
-          shareId,
-          token,
-          filename: fileData.origFilename,
-          sizeBytes: fileData.sizeBytes,
-          expiresAt,
-        });
+      busboy.on('close', () => {
+        busboyFinished = true;
+        checkComplete();
       });
 
       req.pipe(busboy);

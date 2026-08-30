@@ -79,13 +79,12 @@ export const PublicCloudShare: React.FC = () => {
 
   const getFileSymbol = (filename: string): string => {
     const ext = filename.split('.').pop()?.toLowerCase() || '';
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return 'photo';
-    if (['mp4', 'mov', 'webm', 'avi', 'mkv'].includes(ext)) return 'film';
-    if (['mp3', 'wav', 'flac', 'aac'].includes(ext)) return 'music.note';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'photo.fill';
+    if (['mp4', 'mov', 'webm', 'avi', 'mkv'].includes(ext)) return 'film.fill';
+    if (['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(ext)) return 'music.note';
     if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return 'archivebox.fill';
-    if (['pdf'].includes(ext)) return 'doc.richtext';
-    if (['txt', 'md', 'json', 'csv', 'log'].includes(ext)) return 'doc.text';
-    return 'doc.fill';
+    if (['txt', 'md', 'json', 'csv', 'log', 'ts', 'js', 'html', 'css', 'py', 'sh', 'yml', 'yaml'].includes(ext)) return 'text.document.fill';
+    return 'document.fill';
   };
 
   return (

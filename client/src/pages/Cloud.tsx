@@ -29,8 +29,14 @@ export const Cloud: React.FC = () => {
   // Active Uploads progress (filename -> percent)
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
+  const [isUploadDropdownOpen, setIsUploadDropdownOpen] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // In-site File Preview modal state
+  const [previewItem, setPreviewItem] = useState<CloudItem | null>(null);
+  const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState<boolean>(false);
 
   // New Folder modal state
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
@@ -49,7 +55,7 @@ export const Cloud: React.FC = () => {
 
   // Permanent Share modal state
   const [shareItemTarget, setShareItemTarget] = useState<CloudItem | null>(null);
-  const [shareExpiry, setShareExpiry] = useState<number | null>(null); // null = permanent
+  const [shareExpiry, setShareExpiry] = useState<number | null>(null);
   const [sharePin, setSharePin] = useState<string>('');
   const [generatedPermanentLink, setGeneratedPermanentLink] = useState<string | null>(null);
   const [isGeneratingShare, setIsGeneratingShare] = useState<boolean>(false);
@@ -95,6 +101,27 @@ export const Cloud: React.FC = () => {
       setActiveShares(res.shares);
     } catch (err) {
       console.error('Failed to load active shares', err);
+    }
+  };
+
+  // Preview loader for text / code files
+  const openPreview = async (item: CloudItem) => {
+    setPreviewItem(item);
+    setPreviewTextContent(null);
+    const ext = item.name.split('.').pop()?.toLowerCase() || '';
+    const isTextFile = ['txt', 'md', 'json', 'csv', 'log', 'ts', 'js', 'jsx', 'tsx', 'html', 'css', 'py', 'sh', 'yml', 'yaml', 'xml', 'c', 'cpp', 'rs', 'go', 'sql', 'env', 'ini'].includes(ext);
+
+    if (isTextFile) {
+      setPreviewLoading(true);
+      try {
+        const res = await fetch(`/api/cloud/download?path=${encodeURIComponent(item.path)}`);
+        const text = await res.text();
+        setPreviewTextContent(text);
+      } catch (err) {
+        setPreviewTextContent('Error loading file preview.');
+      } finally {
+        setPreviewLoading(false);
+      }
     }
   };
 
@@ -301,6 +328,9 @@ export const Cloud: React.FC = () => {
     if (!window.confirm(`Are you sure you want to delete "${item.name}"?`)) return;
     try {
       await api.cloud.deleteItem(item.path);
+      if (previewItem?.path === item.path) {
+        setPreviewItem(null);
+      }
       loadFiles(currentPath);
     } catch (err: any) {
       alert(`Error deleting item: ${err.message}`);
@@ -350,13 +380,12 @@ export const Cloud: React.FC = () => {
   const getFileSymbol = (item: CloudItem): string => {
     if (item.type === 'folder') return 'folder.fill';
     const ext = item.name.split('.').pop()?.toLowerCase() || '';
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return 'photo';
-    if (['mp4', 'mov', 'webm', 'avi', 'mkv'].includes(ext)) return 'film';
-    if (['mp3', 'wav', 'flac', 'aac'].includes(ext)) return 'music.note';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'photo.fill';
+    if (['mp4', 'mov', 'webm', 'avi', 'mkv'].includes(ext)) return 'film.fill';
+    if (['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(ext)) return 'music.note';
     if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return 'archivebox.fill';
-    if (['pdf'].includes(ext)) return 'doc.richtext';
-    if (['txt', 'md', 'json', 'csv', 'log', 'ts', 'js'].includes(ext)) return 'doc.text';
-    return 'doc.fill';
+    if (['txt', 'md', 'json', 'csv', 'log', 'ts', 'js', 'html', 'css', 'py', 'sh', 'yml', 'yaml'].includes(ext)) return 'text.document.fill';
+    return 'document.fill';
   };
 
   // Filtered items
@@ -380,7 +409,7 @@ export const Cloud: React.FC = () => {
         {/* Drag Overlay */}
         {isDragOver && (
           <div className="absolute inset-4 z-50 rounded-3xl bg-cyan-950/80 border-2 border-dashed border-cyan-400 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none space-y-3">
-            <SymbolIcon name="arrow.down.doc.fill" className="w-16 h-16 text-cyan-400 animate-bounce" />
+            <SymbolIcon name="arrow.down.document.fill" className="w-16 h-16 text-cyan-400 animate-bounce" />
             <h2 className="text-xl font-bold text-white">Drop files or folders to upload</h2>
             <p className="text-xs text-cyan-200">Everything will be uploaded directly to {currentPath || 'My Files'}</p>
           </div>
@@ -433,25 +462,45 @@ export const Cloud: React.FC = () => {
               <span>New Folder</span>
             </button>
 
-            {/* Upload File Button */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-3.5 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-cyan-500/30 text-xs font-semibold text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm"
-              title="Upload files"
-            >
-              <SymbolIcon name="arrow.up.doc.fill" className="w-4 h-4" />
-              <span>Upload File</span>
-            </button>
+            {/* Single Upload Button with Dropdown Selector */}
+            <div className="relative">
+              <button
+                onClick={() => setIsUploadDropdownOpen(!isUploadDropdownOpen)}
+                className="px-3.5 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-cyan-500/30 text-xs font-semibold text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm"
+              >
+                <SymbolIcon name="arrow.up.document.fill" className="w-4 h-4" />
+                <span>Upload</span>
+                <SymbolIcon name="chevron.down" className="w-3 h-3 text-cyan-400 ml-0.5" />
+              </button>
 
-            {/* Upload Folder Button */}
-            <button
-              onClick={() => folderInputRef.current?.click()}
-              className="px-3.5 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-cyan-500/30 text-xs font-semibold text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm"
-              title="Upload an entire folder"
-            >
-              <SymbolIcon name="folder.fill" className="w-4 h-4" />
-              <span>Upload Folder</span>
-            </button>
+              {isUploadDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setIsUploadDropdownOpen(false)} />
+                  <div className="absolute right-0 mt-1.5 w-44 rounded-2xl bg-surface-card border border-surface-border shadow-2xl p-1.5 z-40 space-y-1">
+                    <button
+                      onClick={() => {
+                        setIsUploadDropdownOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-surface-hover transition-colors text-left"
+                    >
+                      <SymbolIcon name="document.fill" className="w-4 h-4 text-cyan-400" />
+                      <span>Upload Files</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsUploadDropdownOpen(false);
+                        folderInputRef.current?.click();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-surface-hover transition-colors text-left"
+                    >
+                      <SymbolIcon name="folder.fill" className="w-4 h-4 text-cyan-400" />
+                      <span>Upload Folder</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Quick Link Button */}
             <button
@@ -593,22 +642,13 @@ export const Cloud: React.FC = () => {
                 Drag and drop files or entire folders here to upload.
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
-              >
-                <SymbolIcon name="arrow.up.doc.fill" className="w-3.5 h-3.5" />
-                <span>Upload File</span>
-              </button>
-              <button
-                onClick={() => folderInputRef.current?.click()}
-                className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-xs font-semibold text-slate-200 transition-all flex items-center gap-1.5"
-              >
-                <SymbolIcon name="folder.fill" className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Upload Folder</span>
-              </button>
-            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
+            >
+              <SymbolIcon name="arrow.up.document.fill" className="w-3.5 h-3.5" />
+              <span>Upload</span>
+            </button>
           </div>
         ) : viewMode === 'grid' ? (
           /* Grid View */
@@ -619,17 +659,15 @@ export const Cloud: React.FC = () => {
               return (
                 <div
                   key={item.path}
-                  onDoubleClick={() => {
+                  onClick={() => {
                     if (isFolder) setCurrentPath(item.path);
+                    else openPreview(item);
                   }}
                   className="group relative p-4 rounded-2xl bg-surface-card hover:bg-surface-hover border border-surface-border hover:border-cyan-500/40 transition-all flex flex-col justify-between cursor-pointer select-none"
                 >
                   <div className="space-y-3">
                     <div className="flex items-start justify-between">
                       <div
-                        onClick={() => {
-                          if (isFolder) setCurrentPath(item.path);
-                        }}
                         style={isFolder ? { backgroundColor: `${folderColor}18`, borderColor: `${folderColor}40`, color: folderColor } : undefined}
                         className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${
                           isFolder
@@ -647,12 +685,22 @@ export const Cloud: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                openPreview(item);
+                              }}
+                              title="Preview"
+                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-cyan-400"
+                            >
+                              <SymbolIcon name="eye.fill" className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 api.cloud.downloadFile(item.path);
                               }}
                               title="Download"
                               className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
                             >
-                              <SymbolIcon name="arrow.down.circle.fill" className="w-3.5 h-3.5" />
+                              <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
                             </button>
                             <button
                               onClick={(e) => {
@@ -704,11 +752,7 @@ export const Cloud: React.FC = () => {
                       </div>
                     </div>
 
-                    <div
-                      onClick={() => {
-                        if (isFolder) setCurrentPath(item.path);
-                      }}
-                    >
+                    <div>
                       <p className="text-xs font-bold text-white truncate" title={item.name}>
                         {item.name}
                       </p>
@@ -740,17 +784,13 @@ export const Cloud: React.FC = () => {
                   return (
                     <tr
                       key={item.path}
-                      onDoubleClick={() => {
+                      onClick={() => {
                         if (isFolder) setCurrentPath(item.path);
+                        else openPreview(item);
                       }}
                       className="border-b border-surface-border/40 hover:bg-surface-hover/60 transition-colors group cursor-pointer"
                     >
-                      <td
-                        onClick={() => {
-                          if (isFolder) setCurrentPath(item.path);
-                        }}
-                        className="px-4 py-3 font-semibold text-white flex items-center gap-2.5 max-w-md truncate"
-                      >
+                      <td className="px-4 py-3 font-semibold text-white flex items-center gap-2.5 max-w-md truncate">
                         <div
                           style={isFolder ? { color: folderColor } : undefined}
                           className={isFolder ? '' : 'text-cyan-400'}
@@ -768,14 +808,28 @@ export const Cloud: React.FC = () => {
                           {!isFolder && (
                             <>
                               <button
-                                onClick={() => api.cloud.downloadFile(item.path)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openPreview(item);
+                                }}
+                                title="Preview"
+                                className="p-1 rounded bg-surface text-slate-300 hover:text-cyan-400"
+                              >
+                                <SymbolIcon name="eye.fill" className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  api.cloud.downloadFile(item.path);
+                                }}
                                 title="Download"
                                 className="p-1 rounded bg-surface text-slate-300 hover:text-white"
                               >
-                                <SymbolIcon name="arrow.down.circle.fill" className="w-3.5 h-3.5" />
+                                <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
                               </button>
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setShareItemTarget(item);
                                   setShareExpiry(null);
                                   setSharePin('');
@@ -789,7 +843,8 @@ export const Cloud: React.FC = () => {
                             </>
                           )}
                           <button
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setEditItemTarget(item);
                               setEditNameValue(item.name);
                               setEditColorValue(item.color || '#3b82f6');
@@ -800,14 +855,20 @@ export const Cloud: React.FC = () => {
                             <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleOpenMoveModal(item)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenMoveModal(item);
+                            }}
                             title="Move"
                             className="p-1 rounded bg-surface text-slate-300 hover:text-white"
                           >
                             <SymbolIcon name="folder.fill" className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleDelete(item)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(item);
+                            }}
                             title="Delete"
                             className="p-1 rounded bg-surface text-slate-300 hover:text-red-400"
                           >
@@ -823,6 +884,152 @@ export const Cloud: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* IN-SITE FILE PREVIEW MODAL */}
+      {previewItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 flex-shrink-0">
+                  <SymbolIcon name={getFileSymbol(previewItem)} className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-white truncate" title={previewItem.name}>
+                    {previewItem.name}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {formatBytes(previewItem.size_bytes)} • Modified {new Date(previewItem.modified_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => api.cloud.downloadFile(previewItem.path)}
+                  className="px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm"
+                >
+                  <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShareItemTarget(previewItem);
+                    setShareExpiry(null);
+                    setSharePin('');
+                    setGeneratedPermanentLink(null);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-surface hover:bg-surface-hover text-slate-300 text-xs font-semibold border border-surface-border flex items-center gap-1.5 transition-all"
+                >
+                  <SymbolIcon name="link" className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Share</span>
+                </button>
+                <button
+                  onClick={() => setPreviewItem(null)}
+                  className="p-1.5 rounded-xl bg-surface hover:bg-surface-hover text-slate-400 hover:text-white border border-surface-border"
+                >
+                  <SymbolIcon name="xmark" className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Preview Body */}
+            <div className="flex-1 overflow-auto rounded-2xl bg-black/40 border border-surface-border flex items-center justify-center p-4 min-h-[300px]">
+              {(() => {
+                const ext = previewItem.name.split('.').pop()?.toLowerCase() || '';
+
+                // 1. Images
+                if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) {
+                  return (
+                    <img
+                      src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`}
+                      alt={previewItem.name}
+                      className="max-h-[68vh] max-w-full rounded-xl object-contain shadow-2xl"
+                    />
+                  );
+                }
+
+                // 2. PDF Documents
+                if (ext === 'pdf') {
+                  return (
+                    <iframe
+                      src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`}
+                      title={previewItem.name}
+                      className="w-full h-[68vh] rounded-xl border-0"
+                    />
+                  );
+                }
+
+                // 3. Videos
+                if (['mp4', 'webm', 'mov', 'mkv'].includes(ext)) {
+                  return (
+                    <video
+                      controls
+                      autoPlay
+                      src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`}
+                      className="max-h-[68vh] max-w-full rounded-xl shadow-2xl"
+                    />
+                  );
+                }
+
+                // 4. Audio
+                if (['mp3', 'wav', 'ogg', 'aac', 'm4a'].includes(ext)) {
+                  return (
+                    <div className="w-full max-w-md p-8 text-center space-y-4">
+                      <div className="w-20 h-20 rounded-3xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center mx-auto shadow-xl">
+                        <SymbolIcon name="music.note" className="w-10 h-10" />
+                      </div>
+                      <p className="text-sm font-bold text-white truncate">{previewItem.name}</p>
+                      <audio controls src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`} className="w-full" />
+                    </div>
+                  );
+                }
+
+                // 5. Code & Text Files
+                if (previewLoading) {
+                  return (
+                    <div className="py-12 text-center text-slate-400 space-y-2">
+                      <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-6 h-6 animate-spin text-cyan-400 mx-auto" />
+                      <p className="text-xs">Loading text preview...</p>
+                    </div>
+                  );
+                }
+
+                if (previewTextContent !== null) {
+                  return (
+                    <pre className="w-full h-[68vh] overflow-auto p-4 font-mono text-xs text-slate-200 bg-slate-950/80 rounded-xl whitespace-pre-wrap select-text leading-relaxed">
+                      {previewTextContent}
+                    </pre>
+                  );
+                }
+
+                // 6. Generic / Binary Files
+                return (
+                  <div className="py-12 text-center space-y-4 max-w-sm">
+                    <div className="w-16 h-16 rounded-3xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center mx-auto shadow-xl">
+                      <SymbolIcon name={getFileSymbol(previewItem)} className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white truncate">{previewItem.name}</h4>
+                      <p className="text-xs text-slate-400 mt-1">
+                        In-site preview is not available for this format ({ext ? `.${ext}` : 'binary'}).
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => api.cloud.downloadFile(previewItem.path)}
+                      className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 inline-flex items-center gap-1.5"
+                    >
+                      <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
+                      <span>Download File</span>
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* QUICK LINK MODAL */}
       {isQuickLinkOpen && (
@@ -864,7 +1071,7 @@ export const Cloud: React.FC = () => {
                 className="border-2 border-dashed border-cyan-500/40 hover:border-cyan-400 rounded-2xl p-8 text-center cursor-pointer bg-cyan-950/10 hover:bg-cyan-950/20 transition-all space-y-3"
               >
                 <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center mx-auto">
-                  <SymbolIcon name="arrow.up.circle.fill" className="w-6 h-6" />
+                  <SymbolIcon name="arrow.up.document.fill" className="w-6 h-6" />
                 </div>
                 <div>
                   <p className="text-xs font-bold text-white">Click or drag file here</p>
