@@ -121,19 +121,11 @@ export const Cloud: React.FC = () => {
     const isTextFile = ['txt', 'md', 'json', 'csv', 'log', 'ts', 'js', 'jsx', 'tsx', 'html', 'css', 'py', 'sh', 'yml', 'yaml', 'xml', 'c', 'cpp', 'rs', 'go', 'sql', 'env', 'ini'].includes(ext);
 
     try {
-      const res = await fetch(`/api/cloud/download?path=${encodeURIComponent(item.path)}&inline=true`, {
-        credentials: 'include',
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to load file (${res.status} ${res.statusText})`);
-      }
-
       if (isTextFile) {
-        const text = await res.text();
+        const text = await api.cloud.getFileText(item.path);
         setPreviewTextContent(text);
       } else {
-        const blob = await res.blob();
+        const blob = await api.cloud.getFileBlob(item.path);
         const objectUrl = URL.createObjectURL(blob);
         setPreviewBlobUrl(objectUrl);
       }
@@ -1000,11 +992,19 @@ export const Cloud: React.FC = () => {
                 // 2. PDF Documents
                 if (ext === 'pdf') {
                   return (
-                    <iframe
-                      src={previewBlobUrl!}
-                      title={previewItem.name}
-                      className="w-full h-[72vh] rounded-xl border-0 bg-slate-950 shadow-lg"
-                    />
+                    <div className="w-full h-full min-h-[72vh] flex flex-col">
+                      <object
+                        data={previewBlobUrl!}
+                        type="application/pdf"
+                        className="w-full h-[72vh] rounded-xl"
+                      >
+                        <iframe
+                          src={previewBlobUrl!}
+                          title={previewItem.name}
+                          className="w-full h-[72vh] rounded-xl border-0 bg-white"
+                        />
+                      </object>
+                    </div>
                   );
                 }
 

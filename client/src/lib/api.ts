@@ -309,8 +309,36 @@ export const api = {
         method: 'DELETE',
         body: JSON.stringify({ path }),
       }),
+    getFileBlob: async (path: string): Promise<Blob> => {
+      const token = localStorage.getItem('token');
+      const headers = new Headers();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const res = await fetch(`/api/cloud/download?path=${encodeURIComponent(path)}&inline=true`, {
+        headers,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to load file (${res.status} ${res.statusText})`);
+      }
+      return res.blob();
+    },
+    getFileText: async (path: string): Promise<string> => {
+      const token = localStorage.getItem('token');
+      const headers = new Headers();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const res = await fetch(`/api/cloud/download?path=${encodeURIComponent(path)}&inline=true`, {
+        headers,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to load text content (${res.status} ${res.statusText})`);
+      }
+      return res.text();
+    },
     downloadFile: (path: string) => {
-      window.open(`/api/cloud/download?path=${encodeURIComponent(path)}`, '_blank');
+      const token = localStorage.getItem('token');
+      const url = `/api/cloud/download?path=${encodeURIComponent(path)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+      window.open(url, '_blank');
     },
     getShares: () =>
       fetchJson<{ shares: CloudShare[] }>('/cloud/shares'),
