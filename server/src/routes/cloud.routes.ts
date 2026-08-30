@@ -116,11 +116,11 @@ cloudRouter.get('/files', (req: AuthenticatedRequest, res: Response) => {
 cloudRouter.post('/folder', (req: AuthenticatedRequest, res: Response) => {
   try {
     const username = req.user!.username;
-    const { path: folderPath } = req.body;
+    const { path: folderPath, color } = req.body;
     if (!folderPath) {
       return res.status(400).json({ error: 'Folder path is required' });
     }
-    CloudService.createFolder(username, folderPath);
+    CloudService.createFolder(username, folderPath, color);
     return res.json({ success: true, path: folderPath });
   } catch (err: any) {
     return res.status(400).json({ error: err.message || 'Failed to create folder' });
@@ -128,14 +128,33 @@ cloudRouter.post('/folder', (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
+ * PUT /api/cloud/folder/color
+ * Update folder color coding
+ */
+cloudRouter.put('/folder/color', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { path: folderPath, color } = req.body;
+    if (!folderPath || !color) {
+      return res.status(400).json({ error: 'Folder path and color are required' });
+    }
+    CloudService.setFolderColor(userId, folderPath, color);
+    return res.json({ success: true, path: folderPath, color });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to set folder color' });
+  }
+});
+
+/**
  * POST /api/cloud/upload
- * Stream multipart upload directly to user's permanent drive
+ * Stream multipart upload directly to user's permanent drive (supports nested folder paths)
  */
 cloudRouter.post('/upload', (req: AuthenticatedRequest, res: Response) => {
   const username = req.user!.username;
   const targetDir = typeof req.query.path === 'string' ? req.query.path : '';
+  const relativePath = typeof req.query.relativePath === 'string' ? req.query.relativePath : undefined;
 
-  CloudService.streamUploadPermanent(username, targetDir, req)
+  CloudService.streamUploadPermanent(username, targetDir, req, relativePath)
     .then((file) => res.json({ success: true, file }))
     .catch((err) => res.status(500).json({ error: err.message || 'Upload failed' }));
 });
@@ -156,16 +175,16 @@ cloudRouter.post('/quick-link/upload', (req: AuthenticatedRequest, res: Response
 
 /**
  * PUT /api/cloud/rename
- * Rename file or folder in user's permanent drive
+ * Rename and/or color-code file or folder in user's permanent drive
  */
 cloudRouter.put('/rename', (req: AuthenticatedRequest, res: Response) => {
   try {
     const username = req.user!.username;
-    const { path: oldPath, newName } = req.body;
+    const { path: oldPath, newName, color } = req.body;
     if (!oldPath || !newName) {
       return res.status(400).json({ error: 'Path and newName are required' });
     }
-    CloudService.renameItem(username, oldPath, newName);
+    CloudService.renameItem(username, oldPath, newName, color);
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(400).json({ error: err.message || 'Failed to rename item' });

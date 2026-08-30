@@ -222,17 +222,26 @@ export const api = {
   cloud: {
     getFiles: (path?: string) =>
       fetchJson<{ items: CloudItem[]; currentPath: string }>(`/cloud/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
-    createFolder: (path: string) =>
+    createFolder: (path: string, color?: string) =>
       fetchJson<{ success: boolean; path: string }>('/cloud/folder', {
         method: 'POST',
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, color }),
       }),
-    uploadFile: (path: string, file: File, onProgress?: (pct: number) => void): Promise<{ success: boolean; file: any }> => {
+    setFolderColor: (path: string, color: string) =>
+      fetchJson<{ success: boolean; path: string; color: string }>('/cloud/folder/color', {
+        method: 'PUT',
+        body: JSON.stringify({ path, color }),
+      }),
+    uploadFile: (path: string, file: File, onProgress?: (pct: number) => void, relativePath?: string): Promise<{ success: boolean; file: any }> => {
       return new Promise((resolve, reject) => {
         const formData = new FormData();
         formData.append('file', file);
+        const queryParams = new URLSearchParams();
+        if (path) queryParams.set('path', path);
+        if (relativePath) queryParams.set('relativePath', relativePath);
+
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', `/api/cloud/upload${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+        xhr.open('POST', `/api/cloud/upload?${queryParams.toString()}`);
         xhr.withCredentials = true;
         if (onProgress) {
           xhr.upload.onprogress = (e) => {
@@ -285,10 +294,10 @@ export const api = {
         xhr.send(formData);
       });
     },
-    renameItem: (path: string, newName: string) =>
+    renameItem: (path: string, newName: string, color?: string) =>
       fetchJson<{ success: boolean }>('/cloud/rename', {
         method: 'PUT',
-        body: JSON.stringify({ path, newName }),
+        body: JSON.stringify({ path, newName, color }),
       }),
     moveItem: (src: string, dest: string) =>
       fetchJson<{ success: boolean }>('/cloud/move', {

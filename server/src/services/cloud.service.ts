@@ -14,6 +14,7 @@ export interface CloudItem {
   modified_at: string;
   mime_type: string | null;
   path: string;
+  color?: string | null;
 }
 
 export interface CloudShareRecord {
@@ -129,6 +130,15 @@ export class CloudService {
     return null;
   }
 
+  static setFolderColor(userId: string, folderPath: string, color: string): void {
+    const id = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO cloud_folder_metadata (id, user_id, folder_path, color)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, folder_path) DO UPDATE SET color = excluded.color
+    `).run(id, userId, folderPath, color);
+  }
+
   static listDirectory(username: string, subPath: string = ''): CloudItem[] {
     this.ensureUserDirs(username);
     const baseFilesDir = this.getUserFilesDir(username);
@@ -140,6 +150,16 @@ export class CloudService {
     const stat = fs.statSync(targetDir);
     if (!stat.isDirectory()) {
       throw new Error('Path is not a directory');
+    }
+
+    // Query folder colors for this user
+    const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id?: string } | undefined;
+    const colorMap: Record<string, string> = {};
+    if (userRow?.id) {
+      const metaRows = db.prepare('SELECT folder_path, color FROM cloud_folder_metadata WHERE user_id = ?').all(userRow.id) as { folder_path: string; color: string }[];
+      for (const m of metaRows) {
+        colorMap[m.folder_path] = m.color;
+      }
     }
 
     const entries = fs.readdirSync(targetDir, { withFileTypes: true });
@@ -159,6 +179,7 @@ export class CloudService {
             modified_at: entryStat.mtime.toISOString(),
             mime_type: null,
             path: relPath,
+            color: colorMap[relPath] || '#3b82f6',
           });
         } else if (entry.isFile()) {
           items.push({
@@ -185,7 +206,7 @@ export class CloudService {
     return items;
   }
 
-  static createFolder(username: string, targetPath: string): void {
+  static createFolder(username: string, targetPath: string, color: string = '#3b82f6'): void {
     this.ensureUserDirs(username);
     const baseFilesDir = this.getUserFilesDir(username);
     const fullPath = this.safeResolvePath(baseFilesDir, targetPath);
@@ -196,9 +217,15 @@ export class CloudService {
       throw new Error('A folder or file with this name already exists');
     }
     fs.mkdirSync(fullPath, { recursive: true });
+
+    const relPath = path.relative(baseFilesDir, fullPath).replace(/\\/g, '/');
+    const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id?: string } | undefined;
+    if (userRow?.id) {
+      this.setFolderColor(userRow.id, relPath, color);
+    }
   }
 
-  static renameItem(username: string, oldVirtualPath: string, newName: string): void {
+  static renameItem(username: string, oldVirtualPath: string, newName: string, color?: string): void {
     this.ensureUserDirs(username);
     const cleanName = path.basename(newName.trim());
     if (!cleanName || cleanName.includes('/') || cleanName.includes('\\') || cleanName === '..') {
@@ -214,11 +241,28 @@ export class CloudService {
     const parentDir = path.dirname(oldFullPath);
     const newFullPath = path.join(parentDir, cleanName);
 
-    if (fs.existsSync(newFullPath)) {
+    if (fs.existsSync(newFullPath) && newFullPath !== oldFullPath) {
       throw new Error('An item with the destination name already exists');
     }
 
-    fs.renameSync(oldFullPath, newFullPath);
+    const isDir = fs.statSync(oldFullPath).isDirectory();
+    if (newFullPath !== oldFullPath) {
+      fs.renameSync(oldFullPath, newFullPath);
+    }
+
+    if (isDir) {
+      const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id?: string } | undefined;
+      if (userRow?.id) {
+        const oldRel = path.relative(baseFilesDir, oldFullPath).replace(/\\/g, '/');
+        const newRel = path.relative(baseFilesDir, newFullPath).replace(/\\/g, '/');
+        if (newRel !== oldRel) {
+          db.prepare('UPDATE cloud_folder_metadata SET folder_path = ? WHERE user_id = ? AND folder_path = ?').run(newRel, userRow.id, oldRel);
+        }
+        if (color) {
+          this.setFolderColor(userRow.id, newRel, color);
+        }
+      }
+    }
   }
 
   static moveItem(username: string, srcVirtualPath: string, destVirtualDir: string): void {
@@ -246,7 +290,17 @@ export class CloudService {
       throw new Error(`An item named "${itemName}" already exists in the destination folder`);
     }
 
+    const isDir = fs.statSync(srcFullPath).isDirectory();
     fs.renameSync(srcFullPath, targetPath);
+
+    if (isDir) {
+      const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id?: string } | undefined;
+      if (userRow?.id) {
+        const oldRel = path.relative(baseFilesDir, srcFullPath).replace(/\\/g, '/');
+        const newRel = path.relative(baseFilesDir, targetPath).replace(/\\/g, '/');
+        db.prepare('UPDATE cloud_folder_metadata SET folder_path = ? WHERE user_id = ? AND folder_path = ?').run(newRel, userRow.id, oldRel);
+      }
+    }
   }
 
   static deleteItem(username: string, virtualPath: string): void {
@@ -264,6 +318,11 @@ export class CloudService {
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) {
       fs.rmSync(fullPath, { recursive: true, force: true });
+      const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id?: string } | undefined;
+      if (userRow?.id) {
+        const rel = path.relative(baseFilesDir, fullPath).replace(/\\/g, '/');
+        db.prepare('DELETE FROM cloud_folder_metadata WHERE user_id = ? AND (folder_path = ? OR folder_path LIKE ?)').run(userRow.id, rel, `${rel}/%`);
+      }
     } else {
       fs.unlinkSync(fullPath);
     }
@@ -272,29 +331,53 @@ export class CloudService {
   static streamUploadPermanent(
     username: string,
     targetVirtualDir: string,
-    req: Request
+    req: Request,
+    subRelativePath?: string
   ): Promise<{ filename: string; path: string; sizeBytes: number; mimeType: string }> {
     this.ensureUserDirs(username);
     const baseFilesDir = this.getUserFilesDir(username);
     const destDir = this.safeResolvePath(baseFilesDir, targetVirtualDir);
-    if (!destDir || !fs.existsSync(destDir)) {
+    if (!destDir) {
       return Promise.reject(new Error('Target directory not found'));
+    }
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
     }
 
     return new Promise((resolve, reject) => {
       const busboy = Busboy({ headers: req.headers });
       let uploadedFile: { filename: string; path: string; sizeBytes: number; mimeType: string } | null = null;
+      let fieldRelativePath = subRelativePath;
+
+      busboy.on('field', (name, val) => {
+        if (name === 'relativePath' && val) {
+          fieldRelativePath = val;
+        }
+      });
 
       busboy.on('file', (_name, fileStream, info) => {
-        const origFilename = path.basename(info.filename);
-        const safeName = origFilename.replace(/[<>:"/\\|?*]/g, '_');
-        let finalPath = path.join(destDir, safeName);
+        let finalDir = destDir;
+        let finalFileName = path.basename(info.filename);
+
+        if (fieldRelativePath) {
+          const cleanRel = fieldRelativePath.replace(/\\/g, '/').split('/').filter((s) => s && s !== '..');
+          if (cleanRel.length > 1) {
+            finalFileName = cleanRel.pop()!;
+            finalDir = path.join(destDir, ...cleanRel);
+            if (!fs.existsSync(finalDir)) {
+              fs.mkdirSync(finalDir, { recursive: true });
+            }
+          }
+        }
+
+        const safeName = finalFileName.replace(/[<>:"/\\|?*]/g, '_');
+        let finalPath = path.join(finalDir, safeName);
 
         let counter = 1;
         const ext = path.extname(safeName);
         const nameWithoutExt = path.basename(safeName, ext);
         while (fs.existsSync(finalPath)) {
-          finalPath = path.join(destDir, `${nameWithoutExt} (${counter})${ext}`);
+          finalPath = path.join(finalDir, `${nameWithoutExt} (${counter})${ext}`);
           counter++;
         }
 

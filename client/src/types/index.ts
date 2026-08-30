@@ -238,6 +238,7 @@ export interface CloudItem {
   modified_at: string;
   mime_type: string | null;
   path: string;
+  color?: string | null;
 }
 
 export interface CloudShare {

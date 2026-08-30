@@ -4,6 +4,19 @@ import { SymbolIcon } from '../components/SymbolIcon.js';
 import { api } from '../lib/api.js';
 import { CloudItem, CloudShare } from '../types/index.js';
 
+const FOLDER_COLORS = [
+  { name: 'Blue', hex: '#3b82f6' },
+  { name: 'Cyan', hex: '#06b6d4' },
+  { name: 'Emerald', hex: '#10b981' },
+  { name: 'Teal', hex: '#14b8a6' },
+  { name: 'Amber', hex: '#f59e0b' },
+  { name: 'Orange', hex: '#f97316' },
+  { name: 'Red', hex: '#ef4444' },
+  { name: 'Purple', hex: '#8b5cf6' },
+  { name: 'Pink', hex: '#ec4899' },
+  { name: 'Slate', hex: '#64748b' },
+];
+
 export const Cloud: React.FC = () => {
   // Navigation & File list state
   const [currentPath, setCurrentPath] = useState<string>('');
@@ -17,18 +30,24 @@ export const Cloud: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
-  // Modals state
+  // New Folder modal state
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
   const [newFolderName, setNewFolderName] = useState<string>('');
+  const [newFolderColor, setNewFolderColor] = useState<string>('#3b82f6');
 
-  const [renameItemTarget, setRenameItemTarget] = useState<CloudItem | null>(null);
-  const [renameValue, setRenameValue] = useState<string>('');
+  // Edit / Rename modal state
+  const [editItemTarget, setEditItemTarget] = useState<CloudItem | null>(null);
+  const [editNameValue, setEditNameValue] = useState<string>('');
+  const [editColorValue, setEditColorValue] = useState<string>('#3b82f6');
 
+  // Move modal state
   const [moveItemTarget, setMoveItemTarget] = useState<CloudItem | null>(null);
   const [moveDestination, setMoveDestination] = useState<string>('');
   const [availableFolders, setAvailableFolders] = useState<string[]>([]);
 
+  // Permanent Share modal state
   const [shareItemTarget, setShareItemTarget] = useState<CloudItem | null>(null);
   const [shareExpiry, setShareExpiry] = useState<number | null>(null); // null = permanent
   const [sharePin, setSharePin] = useState<string>('');
@@ -79,7 +98,61 @@ export const Cloud: React.FC = () => {
     }
   };
 
-  // Drag & drop handlers for file upload
+  // Recursive Directory Scanner for Drag & Drop
+  const scanDirectoryEntry = async (entry: any, basePath: string = ''): Promise<Array<{ file: File; relativePath: string }>> => {
+    const results: Array<{ file: File; relativePath: string }> = [];
+
+    if (entry.isFile) {
+      const file: File = await new Promise((resolve, reject) => entry.file(resolve, reject));
+      results.push({ file, relativePath: basePath ? `${basePath}/${entry.name}` : entry.name });
+    } else if (entry.isDirectory) {
+      const dirReader = entry.createReader();
+      const readEntries = async (): Promise<any[]> => {
+        return new Promise((resolve, reject) => {
+          dirReader.readEntries(resolve, reject);
+        });
+      };
+
+      let entries: any[] = [];
+      let batch: any[] = await readEntries();
+      while (batch.length > 0) {
+        entries = entries.concat(batch);
+        batch = await readEntries();
+      }
+
+      const nextBasePath = basePath ? `${basePath}/${entry.name}` : entry.name;
+      for (const child of entries) {
+        const nested = await scanDirectoryEntry(child, nextBasePath);
+        results.push(...nested);
+      }
+    }
+
+    return results;
+  };
+
+  // Upload batch of files (supporting relative paths for folders)
+  const uploadFileList = async (fileEntries: Array<{ file: File; relativePath?: string }>) => {
+    for (const item of fileEntries) {
+      const displayName = item.relativePath || item.file.name;
+      setUploadProgress((prev) => ({ ...prev, [displayName]: 0 }));
+      try {
+        await api.cloud.uploadFile(currentPath, item.file, (pct) => {
+          setUploadProgress((prev) => ({ ...prev, [displayName]: pct }));
+        }, item.relativePath);
+      } catch (err: any) {
+        alert(`Failed to upload ${displayName}: ${err.message}`);
+      } finally {
+        setUploadProgress((prev) => {
+          const next = { ...prev };
+          delete next[displayName];
+          return next;
+        });
+      }
+    }
+    loadFiles(currentPath);
+  };
+
+  // Drag & drop handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -93,36 +166,51 @@ export const Cloud: React.FC = () => {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      await uploadFiles(Array.from(e.dataTransfer.files));
+
+    const items = e.dataTransfer.items;
+    if (items && items.length > 0) {
+      const fileEntries: Array<{ file: File; relativePath: string }> = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.webkitGetAsEntry) {
+          const entry = item.webkitGetAsEntry();
+          if (entry) {
+            const scanned = await scanDirectoryEntry(entry);
+            fileEntries.push(...scanned);
+          }
+        } else {
+          const file = item.getAsFile();
+          if (file) fileEntries.push({ file, relativePath: file.name });
+        }
+      }
+      if (fileEntries.length > 0) {
+        await uploadFileList(fileEntries);
+      }
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files).map((file) => ({ file, relativePath: file.name }));
+      await uploadFileList(files);
     }
   };
 
+  // File Input Change (Standard Files)
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      await uploadFiles(Array.from(e.target.files));
+      const files = Array.from(e.target.files).map((file) => ({ file, relativePath: file.name }));
+      await uploadFileList(files);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const uploadFiles = async (files: File[]) => {
-    for (const file of files) {
-      setUploadProgress((prev) => ({ ...prev, [file.name]: 0 }));
-      try {
-        await api.cloud.uploadFile(currentPath, file, (pct) => {
-          setUploadProgress((prev) => ({ ...prev, [file.name]: pct }));
-        });
-      } catch (err: any) {
-        alert(`Failed to upload ${file.name}: ${err.message}`);
-      } finally {
-        setUploadProgress((prev) => {
-          const next = { ...prev };
-          delete next[file.name];
-          return next;
-        });
-      }
+  // Folder Input Change (Entire Directory Selection)
+  const handleFolderInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files).map((file) => ({
+        file,
+        relativePath: (file as any).webkitRelativePath || file.name,
+      }));
+      await uploadFileList(files);
+      if (folderInputRef.current) folderInputRef.current.value = '';
     }
-    loadFiles(currentPath);
   };
 
   // Quick Link Upload handler
@@ -155,26 +243,31 @@ export const Cloud: React.FC = () => {
     if (!newFolderName.trim()) return;
     const target = currentPath ? `${currentPath}/${newFolderName.trim()}` : newFolderName.trim();
     try {
-      await api.cloud.createFolder(target);
+      await api.cloud.createFolder(target, newFolderColor);
       setIsNewFolderOpen(false);
       setNewFolderName('');
+      setNewFolderColor('#3b82f6');
       loadFiles(currentPath);
     } catch (err: any) {
       alert(`Error creating folder: ${err.message}`);
     }
   };
 
-  // Rename
-  const handleRename = async (e: React.FormEvent) => {
+  // Edit / Rename / Color folder
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!renameItemTarget || !renameValue.trim()) return;
+    if (!editItemTarget || !editNameValue.trim()) return;
     try {
-      await api.cloud.renameItem(renameItemTarget.path, renameValue.trim());
-      setRenameItemTarget(null);
-      setRenameValue('');
+      const isFolder = editItemTarget.type === 'folder';
+      await api.cloud.renameItem(
+        editItemTarget.path,
+        editNameValue.trim(),
+        isFolder ? editColorValue : undefined
+      );
+      setEditItemTarget(null);
       loadFiles(currentPath);
     } catch (err: any) {
-      alert(`Error renaming item: ${err.message}`);
+      alert(`Error saving changes: ${err.message}`);
     }
   };
 
@@ -182,10 +275,9 @@ export const Cloud: React.FC = () => {
   const handleOpenMoveModal = async (item: CloudItem) => {
     setMoveItemTarget(item);
     setMoveDestination('');
-    // Collect list of folders
     try {
       const rootRes = await api.cloud.getFiles('');
-      const folderList: string[] = ['']; // '' represents root
+      const folderList: string[] = [''];
       rootRes.items.filter((i) => i.type === 'folder').forEach((f) => folderList.push(f.path));
       setAvailableFolders(folderList);
     } catch {
@@ -289,28 +381,30 @@ export const Cloud: React.FC = () => {
         {isDragOver && (
           <div className="absolute inset-4 z-50 rounded-3xl bg-cyan-950/80 border-2 border-dashed border-cyan-400 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none space-y-3">
             <SymbolIcon name="arrow.down.doc.fill" className="w-16 h-16 text-cyan-400 animate-bounce" />
-            <h2 className="text-xl font-bold text-white">Drop files to upload</h2>
-            <p className="text-xs text-cyan-200">Files will be uploaded directly to {currentPath || 'My Files'}</p>
+            <h2 className="text-xl font-bold text-white">Drop files or folders to upload</h2>
+            <p className="text-xs text-cyan-200">Everything will be uploaded directly to {currentPath || 'My Files'}</p>
           </div>
         )}
 
         {/* Hidden inputs */}
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileInputChange} />
+        <input
+          ref={folderInputRef}
+          type="file"
+          {...({ webkitdirectory: '', directory: '' } as any)}
+          multiple
+          className="hidden"
+          onChange={handleFolderInputChange}
+        />
 
-        {/* Top Header Bar */}
+        {/* Top Header Bar — Clean without subtitles */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-glow shadow-cyan-500/10">
-              <SymbolIcon name="cloud.fill" className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-glow shadow-cyan-500/10">
+              <SymbolIcon name="cloud.fill" className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
-                <span>Cloud Drive</span>
-                <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 font-mono text-[10px] font-semibold">
-                  Personal Vault
-                </span>
-              </h1>
-              <p className="text-xs text-slate-400">OneDrive-style personal storage & instant Quick Link sharing.</p>
+              <h1 className="text-2xl font-bold text-white tracking-tight">Cloud Drive</h1>
             </div>
           </div>
 
@@ -328,19 +422,35 @@ export const Cloud: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setIsNewFolderOpen(true)}
+              onClick={() => {
+                setNewFolderName('');
+                setNewFolderColor('#3b82f6');
+                setIsNewFolderOpen(true);
+              }}
               className="px-3.5 py-2 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-xs font-semibold text-slate-200 transition-all flex items-center gap-1.5"
             >
               <SymbolIcon name="folder.badge.plus" className="w-4 h-4 text-cyan-400" />
               <span>New Folder</span>
             </button>
 
+            {/* Upload File Button */}
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-cyan-500/30 text-xs font-semibold text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm"
+              className="px-3.5 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-cyan-500/30 text-xs font-semibold text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm"
+              title="Upload files"
             >
               <SymbolIcon name="arrow.up.doc.fill" className="w-4 h-4" />
-              <span>Upload</span>
+              <span>Upload File</span>
+            </button>
+
+            {/* Upload Folder Button */}
+            <button
+              onClick={() => folderInputRef.current?.click()}
+              className="px-3.5 py-2 rounded-xl bg-surface-active hover:bg-surface-hover border border-cyan-500/30 text-xs font-semibold text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm"
+              title="Upload an entire folder"
+            >
+              <SymbolIcon name="folder.fill" className="w-4 h-4" />
+              <span>Upload Folder</span>
             </button>
 
             {/* Quick Link Button */}
@@ -365,7 +475,7 @@ export const Cloud: React.FC = () => {
           <div className="mb-6 space-y-2 p-4 rounded-2xl bg-cyan-950/40 border border-cyan-500/30">
             <div className="text-xs font-bold text-cyan-300 flex items-center gap-2">
               <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-3.5 h-3.5 animate-spin" />
-              <span>Uploading files directly to disk...</span>
+              <span>Uploading directly to disk...</span>
             </div>
             {Object.entries(uploadProgress).map(([fname, pct]) => (
               <div key={fname} className="space-y-1">
@@ -480,22 +590,32 @@ export const Cloud: React.FC = () => {
             <div>
               <h3 className="text-sm font-bold text-white">This folder is empty</h3>
               <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                Drag and drop files here to upload, or use the buttons above to create folders.
+                Drag and drop files or entire folders here to upload.
               </p>
             </div>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
-            >
-              <SymbolIcon name="arrow.up.doc.fill" className="w-3.5 h-3.5" />
-              <span>Upload First File</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
+              >
+                <SymbolIcon name="arrow.up.doc.fill" className="w-3.5 h-3.5" />
+                <span>Upload File</span>
+              </button>
+              <button
+                onClick={() => folderInputRef.current?.click()}
+                className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-xs font-semibold text-slate-200 transition-all flex items-center gap-1.5"
+              >
+                <SymbolIcon name="folder.fill" className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Upload Folder</span>
+              </button>
+            </div>
           </div>
         ) : viewMode === 'grid' ? (
           /* Grid View */
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
             {filteredItems.map((item) => {
               const isFolder = item.type === 'folder';
+              const folderColor = item.color || '#3b82f6';
               return (
                 <div
                   key={item.path}
@@ -510,16 +630,17 @@ export const Cloud: React.FC = () => {
                         onClick={() => {
                           if (isFolder) setCurrentPath(item.path);
                         }}
-                        className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
+                        style={isFolder ? { backgroundColor: `${folderColor}18`, borderColor: `${folderColor}40`, color: folderColor } : undefined}
+                        className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${
                           isFolder
-                            ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20 group-hover:scale-105'
-                            : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 group-hover:scale-105'
+                            ? 'group-hover:scale-105 shadow-sm'
+                            : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 group-hover:scale-105'
                         }`}
                       >
                         <SymbolIcon name={getFileSymbol(item)} className="w-6 h-6" />
                       </div>
 
-                      {/* Item Actions Hover Dropdown/Buttons */}
+                      {/* Item Actions Hover Buttons */}
                       <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                         {!isFolder && (
                           <>
@@ -551,10 +672,11 @@ export const Cloud: React.FC = () => {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            setRenameItemTarget(item);
-                            setRenameValue(item.name);
+                            setEditItemTarget(item);
+                            setEditNameValue(item.name);
+                            setEditColorValue(item.color || '#3b82f6');
                           }}
-                          title="Rename"
+                          title={isFolder ? 'Edit Folder & Color' : 'Rename File'}
                           className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
                         >
                           <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
@@ -614,6 +736,7 @@ export const Cloud: React.FC = () => {
               <tbody>
                 {filteredItems.map((item) => {
                   const isFolder = item.type === 'folder';
+                  const folderColor = item.color || '#3b82f6';
                   return (
                     <tr
                       key={item.path}
@@ -628,10 +751,12 @@ export const Cloud: React.FC = () => {
                         }}
                         className="px-4 py-3 font-semibold text-white flex items-center gap-2.5 max-w-md truncate"
                       >
-                        <SymbolIcon
-                          name={getFileSymbol(item)}
-                          className={`w-4 h-4 ${isFolder ? 'text-blue-400' : 'text-cyan-400'}`}
-                        />
+                        <div
+                          style={isFolder ? { color: folderColor } : undefined}
+                          className={isFolder ? '' : 'text-cyan-400'}
+                        >
+                          <SymbolIcon name={getFileSymbol(item)} className="w-4 h-4" />
+                        </div>
                         <span className="truncate" title={item.name}>
                           {item.name}
                         </span>
@@ -665,10 +790,11 @@ export const Cloud: React.FC = () => {
                           )}
                           <button
                             onClick={() => {
-                              setRenameItemTarget(item);
-                              setRenameValue(item.name);
+                              setEditItemTarget(item);
+                              setEditNameValue(item.name);
+                              setEditColorValue(item.color || '#3b82f6');
                             }}
-                            title="Rename"
+                            title={isFolder ? 'Edit Folder & Color' : 'Rename'}
                             className="p-1 rounded bg-surface text-slate-300 hover:text-white"
                           >
                             <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
@@ -801,7 +927,7 @@ export const Cloud: React.FC = () => {
                   />
                 </div>
 
-                {/* Generated Link Field (Disabled until upload is complete) */}
+                {/* Generated Link Field */}
                 {quickLinkResult && (
                   <div className="p-3 rounded-2xl bg-black/50 border border-cyan-500/30 space-y-2">
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-cyan-400">
@@ -1048,19 +1174,55 @@ export const Cloud: React.FC = () => {
         </div>
       )}
 
-      {/* NEW FOLDER MODAL */}
+      {/* NEW FOLDER MODAL (WITH COLOR PICKER) */}
       {isNewFolderOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <form onSubmit={handleCreateFolder} className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="text-sm font-bold text-white">Create New Folder</h3>
-            <input
-              type="text"
-              placeholder="Folder name..."
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              autoFocus
-              className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none"
-            />
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <SymbolIcon name="folder.badge.plus" className="w-4 h-4 text-cyan-400" />
+                <span>Create New Folder</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsNewFolderOpen(false)}
+                className="p-1 rounded-lg bg-surface text-slate-400 hover:text-white"
+              >
+                <SymbolIcon name="xmark" className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Folder Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Invoices, Project Assets..."
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                autoFocus
+                className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Color Swatches */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Folder Color</label>
+              <div className="flex items-center gap-2 flex-wrap">
+                {FOLDER_COLORS.map((c) => (
+                  <button
+                    key={c.hex}
+                    type="button"
+                    onClick={() => setNewFolderColor(c.hex)}
+                    style={{ backgroundColor: c.hex }}
+                    className={`w-7 h-7 rounded-full transition-transform ${
+                      newFolderColor === c.hex ? 'ring-2 ring-white scale-110 shadow-lg' : 'hover:scale-105 opacity-85 hover:opacity-100'
+                    }`}
+                    title={c.name}
+                  />
+                ))}
+              </div>
+            </div>
+
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1077,28 +1239,66 @@ export const Cloud: React.FC = () => {
         </div>
       )}
 
-      {/* RENAME MODAL */}
-      {renameItemTarget && (
+      {/* EDIT / RENAME / COLOR CODE MODAL */}
+      {editItemTarget && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <form onSubmit={handleRename} className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
-            <h3 className="text-sm font-bold text-white">Rename Item</h3>
-            <input
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              autoFocus
-              className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none"
-            />
+          <form onSubmit={handleSaveEdit} className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <SymbolIcon name={editItemTarget.type === 'folder' ? 'folder.fill' : 'pencil'} className="w-4 h-4 text-cyan-400" />
+                <span>{editItemTarget.type === 'folder' ? 'Edit Folder & Color' : 'Rename File'}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditItemTarget(null)}
+                className="p-1 rounded-lg bg-surface text-slate-400 hover:text-white"
+              >
+                <SymbolIcon name="xmark" className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Name</label>
+              <input
+                type="text"
+                value={editNameValue}
+                onChange={(e) => setEditNameValue(e.target.value)}
+                autoFocus
+                className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-surface-border text-white text-xs focus:ring-1 focus:ring-cyan-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Folder Color Picker in Edit menu */}
+            {editItemTarget.type === 'folder' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Folder Color</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {FOLDER_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      type="button"
+                      onClick={() => setEditColorValue(c.hex)}
+                      style={{ backgroundColor: c.hex }}
+                      className={`w-7 h-7 rounded-full transition-transform ${
+                        editColorValue === c.hex ? 'ring-2 ring-white scale-110 shadow-lg' : 'hover:scale-105 opacity-85 hover:opacity-100'
+                      }`}
+                      title={c.name}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setRenameItemTarget(null)}
+                onClick={() => setEditItemTarget(null)}
                 className="px-4 py-2 rounded-xl bg-surface text-xs font-semibold text-slate-300 border border-surface-border"
               >
                 Cancel
               </button>
               <button type="submit" className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white">
-                Rename
+                Save Changes
               </button>
             </div>
           </form>

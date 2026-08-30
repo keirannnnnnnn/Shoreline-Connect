@@ -338,6 +338,18 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_cloud_audit_user ON cloud_quick_link_audit(user_id);
     CREATE INDEX IF NOT EXISTS idx_cloud_audit_share ON cloud_quick_link_audit(share_id);
+
+    CREATE TABLE IF NOT EXISTS cloud_folder_metadata (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      folder_path TEXT NOT NULL,
+      color TEXT DEFAULT '#3b82f6',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, folder_path),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cloud_folder_meta ON cloud_folder_metadata(user_id, folder_path);
   `);
 
   // Initialize default settings if not exists
