@@ -734,7 +734,7 @@ export class CloudService {
     readStream.pipe(res);
   }
 
-  static streamDownloadUserFile(username: string, virtualPath: string, res: Response): void {
+  static streamDownloadUserFile(username: string, virtualPath: string, res: Response, inline = false): void {
     this.ensureUserDirs(username);
     const baseFilesDir = this.getUserFilesDir(username);
     const fullPath = this.safeResolvePath(baseFilesDir, virtualPath);
@@ -750,7 +750,8 @@ export class CloudService {
 
     const filename = path.basename(fullPath);
     const encodedFilename = encodeURIComponent(filename);
-    res.setHeader('Content-Disposition', `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
+    const dispositionType = inline ? 'inline' : 'attachment';
+    res.setHeader('Content-Disposition', `${dispositionType}; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`);
     res.setHeader('Content-Type', getMimeType(filename));
     res.setHeader('Content-Length', stat.size);
 

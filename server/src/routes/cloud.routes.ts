@@ -235,10 +235,11 @@ cloudRouter.get('/download', (req: AuthenticatedRequest, res: Response) => {
   try {
     const username = req.user!.username;
     const virtualPath = typeof req.query.path === 'string' ? req.query.path : '';
+    const inline = req.query.inline === 'true';
     if (!virtualPath) {
       return res.status(400).send('Path is required');
     }
-    CloudService.streamDownloadUserFile(username, virtualPath, res);
+    CloudService.streamDownloadUserFile(username, virtualPath, res, inline);
   } catch (err: any) {
     if (!res.headersSent) {
       return res.status(500).send(`Download failed: ${err.message}`);

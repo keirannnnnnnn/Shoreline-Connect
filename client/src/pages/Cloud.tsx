@@ -35,8 +35,10 @@ export const Cloud: React.FC = () => {
 
   // In-site File Preview modal state
   const [previewItem, setPreviewItem] = useState<CloudItem | null>(null);
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState<boolean>(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   // New Folder modal state
   const [isNewFolderOpen, setIsNewFolderOpen] = useState<boolean>(false);
@@ -104,25 +106,52 @@ export const Cloud: React.FC = () => {
     }
   };
 
-  // Preview loader for text / code files
+  // Preview loader for any file
   const openPreview = async (item: CloudItem) => {
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+    }
     setPreviewItem(item);
+    setPreviewBlobUrl(null);
     setPreviewTextContent(null);
+    setPreviewError(null);
+    setPreviewLoading(true);
+
     const ext = item.name.split('.').pop()?.toLowerCase() || '';
     const isTextFile = ['txt', 'md', 'json', 'csv', 'log', 'ts', 'js', 'jsx', 'tsx', 'html', 'css', 'py', 'sh', 'yml', 'yaml', 'xml', 'c', 'cpp', 'rs', 'go', 'sql', 'env', 'ini'].includes(ext);
 
-    if (isTextFile) {
-      setPreviewLoading(true);
-      try {
-        const res = await fetch(`/api/cloud/download?path=${encodeURIComponent(item.path)}`);
+    try {
+      const res = await fetch(`/api/cloud/download?path=${encodeURIComponent(item.path)}&inline=true`, {
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to load file (${res.status} ${res.statusText})`);
+      }
+
+      if (isTextFile) {
         const text = await res.text();
         setPreviewTextContent(text);
-      } catch (err) {
-        setPreviewTextContent('Error loading file preview.');
-      } finally {
-        setPreviewLoading(false);
+      } else {
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        setPreviewBlobUrl(objectUrl);
       }
+    } catch (err: any) {
+      setPreviewError(err.message || 'Error loading preview');
+    } finally {
+      setPreviewLoading(false);
     }
+  };
+
+  const closePreview = () => {
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+    }
+    setPreviewBlobUrl(null);
+    setPreviewItem(null);
+    setPreviewTextContent(null);
+    setPreviewError(null);
   };
 
   // Recursive Directory Scanner for Drag & Drop
@@ -329,7 +358,7 @@ export const Cloud: React.FC = () => {
     try {
       await api.cloud.deleteItem(item.path);
       if (previewItem?.path === item.path) {
-        setPreviewItem(null);
+        closePreview();
       }
       loadFiles(currentPath);
     } catch (err: any) {
@@ -888,7 +917,7 @@ export const Cloud: React.FC = () => {
       {/* IN-SITE FILE PREVIEW MODAL */}
       {previewItem && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
+          <div className="w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-surface-border pb-3">
               <div className="flex items-center gap-3 min-w-0">
@@ -926,7 +955,7 @@ export const Cloud: React.FC = () => {
                   <span>Share</span>
                 </button>
                 <button
-                  onClick={() => setPreviewItem(null)}
+                  onClick={closePreview}
                   className="p-1.5 rounded-xl bg-surface hover:bg-surface-hover text-slate-400 hover:text-white border border-surface-border"
                 >
                   <SymbolIcon name="xmark" className="w-4 h-4" />
@@ -935,18 +964,36 @@ export const Cloud: React.FC = () => {
             </div>
 
             {/* Preview Body */}
-            <div className="flex-1 overflow-auto rounded-2xl bg-black/40 border border-surface-border flex items-center justify-center p-4 min-h-[300px]">
-              {(() => {
+            <div className="flex-1 overflow-auto rounded-2xl bg-black/40 border border-surface-border flex items-center justify-center p-2 min-h-[350px]">
+              {previewLoading ? (
+                <div className="py-16 text-center text-slate-400 space-y-3">
+                  <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-8 h-8 animate-spin text-cyan-400 mx-auto" />
+                  <p className="text-xs font-semibold text-slate-300">Loading preview directly from storage...</p>
+                </div>
+              ) : previewError ? (
+                <div className="py-16 text-center space-y-3 max-w-sm">
+                  <SymbolIcon name="exclamationmark.triangle.fill" className="w-8 h-8 text-amber-400 mx-auto" />
+                  <p className="text-xs text-red-400 font-semibold">{previewError}</p>
+                  <button
+                    onClick={() => openPreview(previewItem)}
+                    className="px-4 py-2 bg-surface hover:bg-surface-hover text-xs font-semibold rounded-xl border border-surface-border text-slate-300"
+                  >
+                    Retry Preview
+                  </button>
+                </div>
+              ) : (() => {
                 const ext = previewItem.name.split('.').pop()?.toLowerCase() || '';
 
                 // 1. Images
                 if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) {
                   return (
-                    <img
-                      src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`}
-                      alt={previewItem.name}
-                      className="max-h-[68vh] max-w-full rounded-xl object-contain shadow-2xl"
-                    />
+                    <div className="w-full h-full flex items-center justify-center p-2">
+                      <img
+                        src={previewBlobUrl!}
+                        alt={previewItem.name}
+                        className="max-h-[70vh] max-w-full rounded-xl object-contain shadow-2xl mx-auto"
+                      />
+                    </div>
                   );
                 }
 
@@ -954,9 +1001,9 @@ export const Cloud: React.FC = () => {
                 if (ext === 'pdf') {
                   return (
                     <iframe
-                      src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`}
+                      src={previewBlobUrl!}
                       title={previewItem.name}
-                      className="w-full h-[68vh] rounded-xl border-0"
+                      className="w-full h-[72vh] rounded-xl border-0 bg-slate-950 shadow-lg"
                     />
                   );
                 }
@@ -967,8 +1014,8 @@ export const Cloud: React.FC = () => {
                     <video
                       controls
                       autoPlay
-                      src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`}
-                      className="max-h-[68vh] max-w-full rounded-xl shadow-2xl"
+                      src={previewBlobUrl!}
+                      className="max-h-[70vh] max-w-full rounded-xl shadow-2xl mx-auto"
                     />
                   );
                 }
@@ -981,24 +1028,15 @@ export const Cloud: React.FC = () => {
                         <SymbolIcon name="music.note" className="w-10 h-10" />
                       </div>
                       <p className="text-sm font-bold text-white truncate">{previewItem.name}</p>
-                      <audio controls src={`/api/cloud/download?path=${encodeURIComponent(previewItem.path)}`} className="w-full" />
+                      <audio controls src={previewBlobUrl!} className="w-full" />
                     </div>
                   );
                 }
 
                 // 5. Code & Text Files
-                if (previewLoading) {
-                  return (
-                    <div className="py-12 text-center text-slate-400 space-y-2">
-                      <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-6 h-6 animate-spin text-cyan-400 mx-auto" />
-                      <p className="text-xs">Loading text preview...</p>
-                    </div>
-                  );
-                }
-
                 if (previewTextContent !== null) {
                   return (
-                    <pre className="w-full h-[68vh] overflow-auto p-4 font-mono text-xs text-slate-200 bg-slate-950/80 rounded-xl whitespace-pre-wrap select-text leading-relaxed">
+                    <pre className="w-full h-[70vh] overflow-auto p-4 font-mono text-xs text-slate-200 bg-slate-950/90 rounded-xl whitespace-pre-wrap select-text leading-relaxed">
                       {previewTextContent}
                     </pre>
                   );
