@@ -206,6 +206,83 @@ export class CloudService {
     return items;
   }
 
+  static getFolderTree(username: string): { path: string; name: string; color: string; children: any[] }[] {
+    this.ensureUserDirs(username);
+    const baseFilesDir = this.getUserFilesDir(username);
+
+    const userRow = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id?: string } | undefined;
+    const colorMap: Record<string, string> = {};
+    if (userRow?.id) {
+      const metaRows = db.prepare('SELECT folder_path, color FROM cloud_folder_metadata WHERE user_id = ?').all(userRow.id) as { folder_path: string; color: string }[];
+      for (const m of metaRows) {
+        colorMap[m.folder_path] = m.color;
+      }
+    }
+
+    const scanDir = (dirPath: string): { path: string; name: string; color: string; children: any[] }[] => {
+      const results: { path: string; name: string; color: string; children: any[] }[] = [];
+      try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const entryPath = path.join(dirPath, entry.name);
+            const relPath = path.relative(baseFilesDir, entryPath).replace(/\\/g, '/');
+            results.push({
+              path: relPath,
+              name: entry.name,
+              color: colorMap[relPath] || '#3b82f6',
+              children: scanDir(entryPath),
+            });
+          }
+        }
+      } catch {
+        // Skip unreadable
+      }
+      return results.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    };
+
+    return scanDir(baseFilesDir);
+  }
+
+  static getUserStorageUsage(username: string): { usedBytes: number; fileCount: number; folderCount: number } {
+    this.ensureUserDirs(username);
+    const filesDir = this.getUserFilesDir(username);
+    const tempDir = this.getUserTempDir(username);
+
+    let usedBytes = 0;
+    let fileCount = 0;
+    let folderCount = 0;
+
+    const traverse = (dir: string) => {
+      try {
+        if (!fs.existsSync(dir)) return;
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            folderCount++;
+            traverse(fullPath);
+          } else if (entry.isFile()) {
+            fileCount++;
+            try {
+              const stat = fs.statSync(fullPath);
+              usedBytes += stat.size;
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    traverse(filesDir);
+    traverse(tempDir);
+
+    return { usedBytes, fileCount, folderCount };
+  }
+
   static createFolder(username: string, targetPath: string, color: string = '#3b82f6'): void {
     this.ensureUserDirs(username);
     const baseFilesDir = this.getUserFilesDir(username);

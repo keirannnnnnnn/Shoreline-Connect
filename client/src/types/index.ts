@@ -278,3 +278,16 @@ export interface CloudSettings {
   configuredPath?: string;
 }
 
+export interface CloudFolderTreeNode {
+  path: string;
+  name: string;
+  color: string;
+  children: CloudFolderTreeNode[];
+}
+
+export interface CloudStorageUsage {
+  usedBytes: number;
+  fileCount: number;
+  folderCount: number;
+}
+

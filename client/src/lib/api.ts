@@ -1,4 +1,4 @@
-import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings } from '../types/index.js';
+import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage } from '../types/index.js';
 
 const API_BASE = '/api';
 
@@ -320,8 +320,14 @@ export const api = {
       if (!res.ok) {
         throw new Error(`Failed to load file (${res.status} ${res.statusText})`);
       }
-      return res.blob();
+      const rawBlob = await res.blob();
+      const contentType = res.headers.get('content-type') || 'application/octet-stream';
+      return new Blob([rawBlob], { type: contentType });
     },
+    getFolderTree: () =>
+      fetchJson<{ tree: CloudFolderTreeNode[] }>('/cloud/tree'),
+    getStorageUsage: () =>
+      fetchJson<CloudStorageUsage>('/cloud/usage'),
     getFileText: async (path: string): Promise<string> => {
       const token = localStorage.getItem('token');
       const headers = new Headers();

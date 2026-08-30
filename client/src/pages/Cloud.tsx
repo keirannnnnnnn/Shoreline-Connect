@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Navbar } from '../components/Navbar.js';
 import { SymbolIcon } from '../components/SymbolIcon.js';
 import { api } from '../lib/api.js';
-import { CloudItem, CloudShare } from '../types/index.js';
+import { CloudItem, CloudShare, CloudFolderTreeNode, CloudStorageUsage } from '../types/index.js';
 
 const FOLDER_COLORS = [
   { name: 'Blue', hex: '#3b82f6' },
@@ -17,6 +17,12 @@ const FOLDER_COLORS = [
   { name: 'Slate', hex: '#64748b' },
 ];
 
+interface PinnedFolder {
+  path: string;
+  name: string;
+  color?: string;
+}
+
 export const Cloud: React.FC = () => {
   // Navigation & File list state
   const [currentPath, setCurrentPath] = useState<string>('');
@@ -25,6 +31,21 @@ export const Cloud: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Sidebar tree & storage usage state
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const [folderTree, setFolderTree] = useState<CloudFolderTreeNode[]>([]);
+  const [expandedTreePaths, setExpandedTreePaths] = useState<Set<string>>(new Set(['']));
+  const [storageUsage, setStorageUsage] = useState<CloudStorageUsage | null>(null);
+  const [pinnedFolders, setPinnedFolders] = useState<PinnedFolder[]>(() => {
+    try {
+      const saved = localStorage.getItem('shoreline_cloud_pinned');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return [{ path: '', name: 'My Files', color: '#3b82f6' }];
+  });
 
   // Active Uploads progress (filename -> percent)
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
@@ -77,6 +98,41 @@ export const Cloud: React.FC = () => {
   const [quickLinkCopied, setQuickLinkCopied] = useState<boolean>(false);
   const quickLinkInputRef = useRef<HTMLInputElement>(null);
 
+  // Save pinned folders
+  const savePinnedFolders = (folders: PinnedFolder[]) => {
+    setPinnedFolders(folders);
+    try {
+      localStorage.setItem('shoreline_cloud_pinned', JSON.stringify(folders));
+    } catch {
+      // ignore
+    }
+  };
+
+  const togglePinFolder = (folderPath: string, folderName: string, folderColor?: string) => {
+    const exists = pinnedFolders.some((f) => f.path === folderPath);
+    if (exists) {
+      savePinnedFolders(pinnedFolders.filter((f) => f.path !== folderPath));
+    } else {
+      savePinnedFolders([...pinnedFolders, { path: folderPath, name: folderName, color: folderColor || '#3b82f6' }]);
+    }
+  };
+
+  const isFolderPinned = (folderPath: string) => pinnedFolders.some((f) => f.path === folderPath);
+
+  // Load Tree and Usage
+  const loadSidebarData = useCallback(async () => {
+    try {
+      const [treeRes, usageRes] = await Promise.all([
+        api.cloud.getFolderTree(),
+        api.cloud.getStorageUsage(),
+      ]);
+      setFolderTree(treeRes.tree);
+      setStorageUsage(usageRes);
+    } catch (err) {
+      console.error('Failed to load sidebar tree/usage', err);
+    }
+  }, []);
+
   // Load directory items
   const loadFiles = useCallback(async (path: string = currentPath) => {
     setLoading(true);
@@ -85,12 +141,13 @@ export const Cloud: React.FC = () => {
       const res = await api.cloud.getFiles(path);
       setItems(res.items);
       setCurrentPath(res.currentPath);
+      loadSidebarData();
     } catch (err: any) {
       setError(err.message || 'Failed to load files');
     } finally {
       setLoading(false);
     }
-  }, [currentPath]);
+  }, [currentPath, loadSidebarData]);
 
   useEffect(() => {
     loadFiles(currentPath);
@@ -108,7 +165,7 @@ export const Cloud: React.FC = () => {
 
   // Preview loader for any file
   const openPreview = async (item: CloudItem) => {
-    if (previewBlobUrl) {
+    if (previewBlobUrl && previewBlobUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewBlobUrl);
     }
     setPreviewItem(item);
@@ -118,6 +175,7 @@ export const Cloud: React.FC = () => {
     setPreviewLoading(true);
 
     const ext = item.name.split('.').pop()?.toLowerCase() || '';
+    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext);
     const isTextFile = ['txt', 'md', 'json', 'csv', 'log', 'ts', 'js', 'jsx', 'tsx', 'html', 'css', 'py', 'sh', 'yml', 'yaml', 'xml', 'c', 'cpp', 'rs', 'go', 'sql', 'env', 'ini'].includes(ext);
 
     try {
@@ -126,8 +184,23 @@ export const Cloud: React.FC = () => {
         setPreviewTextContent(text);
       } else {
         const blob = await api.cloud.getFileBlob(item.path);
-        const objectUrl = URL.createObjectURL(blob);
-        setPreviewBlobUrl(objectUrl);
+
+        if (isImage) {
+          // Use DataURL for 100% reliable image rendering in <img> tags
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setPreviewBlobUrl(reader.result as string);
+          };
+          reader.onerror = () => {
+            const objectUrl = URL.createObjectURL(blob);
+            setPreviewBlobUrl(objectUrl);
+          };
+          reader.readAsDataURL(blob);
+        } else {
+          // PDFs, Videos, Audio
+          const objectUrl = URL.createObjectURL(blob);
+          setPreviewBlobUrl(objectUrl);
+        }
       }
     } catch (err: any) {
       setPreviewError(err.message || 'Error loading preview');
@@ -137,13 +210,24 @@ export const Cloud: React.FC = () => {
   };
 
   const closePreview = () => {
-    if (previewBlobUrl) {
+    if (previewBlobUrl && previewBlobUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewBlobUrl);
     }
     setPreviewBlobUrl(null);
     setPreviewItem(null);
     setPreviewTextContent(null);
     setPreviewError(null);
+  };
+
+  // Toggle tree node expansion
+  const toggleTreeNodeExpand = (e: React.MouseEvent, path: string) => {
+    e.stopPropagation();
+    setExpandedTreePaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   };
 
   // Recursive Directory Scanner for Drag & Drop
@@ -179,12 +263,12 @@ export const Cloud: React.FC = () => {
   };
 
   // Upload batch of files (supporting relative paths for folders)
-  const uploadFileList = async (fileEntries: Array<{ file: File; relativePath?: string }>) => {
+  const uploadFileList = async (fileEntries: Array<{ file: File; relativePath?: string }>, targetDirectory: string = currentPath) => {
     for (const item of fileEntries) {
       const displayName = item.relativePath || item.file.name;
       setUploadProgress((prev) => ({ ...prev, [displayName]: 0 }));
       try {
-        await api.cloud.uploadFile(currentPath, item.file, (pct) => {
+        await api.cloud.uploadFile(targetDirectory, item.file, (pct) => {
           setUploadProgress((prev) => ({ ...prev, [displayName]: pct }));
         }, item.relativePath);
       } catch (err: any) {
@@ -389,8 +473,8 @@ export const Cloud: React.FC = () => {
   };
 
   // Helpers
-  const formatBytes = (bytes: number | null): string => {
-    if (bytes === null || bytes === undefined) return '—';
+  const formatBytes = (bytes: number | null | undefined): string => {
+    if (bytes === null || bytes === undefined) return '0 B';
     if (bytes === 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -417,6 +501,56 @@ export const Cloud: React.FC = () => {
   // Breadcrumbs
   const pathSegments = currentPath ? currentPath.split('/') : [];
 
+  // Recursive Tree Node Renderer for Explorer Subtree
+  const renderTreeNode = (node: CloudFolderTreeNode, depth: number = 1) => {
+    const hasChildren = node.children && node.children.length > 0;
+    const isExpanded = expandedTreePaths.has(node.path);
+    const isActive = currentPath === node.path;
+    const nodeColor = node.color || '#3b82f6';
+
+    return (
+      <div key={node.path} className="flex flex-col select-none">
+        <div
+          onClick={() => setCurrentPath(node.path)}
+          className={`flex items-center gap-1.5 py-1.5 px-2 rounded-xl text-xs cursor-pointer transition-all ${
+            isActive
+              ? 'bg-cyan-500/15 text-cyan-300 font-bold border-l-2 border-cyan-400'
+              : 'text-slate-300 hover:bg-surface-hover hover:text-white'
+          }`}
+          style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        >
+          {hasChildren ? (
+            <button
+              onClick={(e) => toggleTreeNodeExpand(e, node.path)}
+              className="p-0.5 rounded hover:bg-surface text-slate-400 hover:text-white"
+            >
+              <SymbolIcon
+                name={isExpanded ? 'chevron.down' : 'chevron.right'}
+                className="w-3 h-3 text-slate-400"
+              />
+            </button>
+          ) : (
+            <span className="w-3" />
+          )}
+
+          <div style={{ color: nodeColor }}>
+            <SymbolIcon name="folder.fill" className="w-3.5 h-3.5 flex-shrink-0" />
+          </div>
+
+          <span className="truncate flex-1" title={node.name}>
+            {node.name}
+          </span>
+        </div>
+
+        {hasChildren && isExpanded && (
+          <div className="flex flex-col">
+            {node.children.map((child) => renderTreeNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background text-slate-100 flex flex-col selection:bg-cyan-500 selection:text-white">
       <Navbar />
@@ -425,7 +559,7 @@ export const Cloud: React.FC = () => {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 relative flex flex-col"
+        className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 relative flex flex-col"
       >
         {/* Drag Overlay */}
         {isDragOver && (
@@ -450,6 +584,13 @@ export const Cloud: React.FC = () => {
         {/* Top Header Bar — Clean without subtitles */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-2 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-slate-300 hover:text-white transition-all md:hidden"
+              title="Toggle sidebar"
+            >
+              <SymbolIcon name="sidebar.left" className="w-5 h-5" />
+            </button>
             <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-glow shadow-cyan-500/10">
               <SymbolIcon name="cloud.fill" className="w-5 h-5" />
             </div>
@@ -561,349 +702,506 @@ export const Cloud: React.FC = () => {
           </div>
         )}
 
-        {/* Navigation Breadcrumbs & Controls */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 mb-6 rounded-2xl bg-surface-card border border-surface-border">
-          {/* Breadcrumb row */}
-          <div className="flex items-center gap-1.5 text-xs overflow-x-auto py-0.5">
-            <button
-              onClick={() => setCurrentPath('')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all ${
-                currentPath === ''
-                  ? 'font-bold text-white bg-surface-active'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
-              }`}
-            >
-              <SymbolIcon name="externaldrive.fill" className="w-3.5 h-3.5 text-cyan-400" />
-              <span>My Files</span>
-            </button>
+        {/* Main Explorer Workspace with Windows-style Side Menu */}
+        <div className="flex-1 flex gap-5 items-start">
+          {/* SIDE MENU (PINNED FOLDERS, DIRECTORY TREE & STORAGE USAGE) */}
+          <aside
+            className={`${
+              isSidebarOpen ? 'flex' : 'hidden'
+            } md:flex flex-col w-64 flex-shrink-0 bg-surface-card border border-surface-border rounded-3xl p-4 space-y-5 sticky top-6 shadow-sm`}
+          >
+            {/* Quick Access / Pinned Folders */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <SymbolIcon name="pin.fill" className="w-3 h-3 text-cyan-400" />
+                  <span>Pinned Folders</span>
+                </span>
+              </div>
 
-            {pathSegments.map((segment, index) => {
-              const segPath = pathSegments.slice(0, index + 1).join('/');
-              const isLast = index === pathSegments.length - 1;
-              return (
-                <React.Fragment key={segPath}>
-                  <span className="text-slate-600 font-mono">/</span>
-                  <button
-                    onClick={() => setCurrentPath(segPath)}
-                    className={`px-2.5 py-1 rounded-lg transition-all ${
-                      isLast
-                        ? 'font-bold text-white bg-surface-active'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
-                    }`}
-                  >
-                    {segment}
-                  </button>
-                </React.Fragment>
-              );
-            })}
-          </div>
+              <div className="space-y-0.5">
+                {pinnedFolders.map((p) => {
+                  const isActive = currentPath === p.path;
+                  const isRoot = p.path === '';
+                  return (
+                    <div
+                      key={p.path}
+                      onClick={() => setCurrentPath(p.path)}
+                      className={`group flex items-center justify-between py-1.5 px-2.5 rounded-xl text-xs cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-cyan-500/15 text-cyan-300 font-bold'
+                          : 'text-slate-300 hover:bg-surface-hover hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <div style={{ color: p.color || '#3b82f6' }}>
+                          <SymbolIcon
+                            name={isRoot ? 'externaldrive.fill' : 'folder.fill'}
+                            className="w-4 h-4 flex-shrink-0"
+                          />
+                        </div>
+                        <span className="truncate">{p.name}</span>
+                      </div>
 
-          {/* Search & View Mode */}
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <SymbolIcon name="magnifyingglass" className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search files..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 rounded-xl bg-surface border border-surface-border text-xs text-white focus:outline-none focus:ring-1 focus:ring-cyan-500 w-36 sm:w-48 placeholder:text-slate-500"
-              />
+                      {!isRoot && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePinFolder(p.path, p.name);
+                          }}
+                          title="Unpin folder"
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface rounded text-slate-400 hover:text-red-400 transition-opacity"
+                        >
+                          <SymbolIcon name="pin.slash.fill" className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="flex items-center p-0.5 rounded-xl bg-surface border border-surface-border">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-1.5 rounded-lg transition-all ${
-                  viewMode === 'grid' ? 'bg-surface-active text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Grid view"
-              >
-                <SymbolIcon name="square.grid.2x2.fill" className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => setViewMode('list')}
-                className={`p-1.5 rounded-lg transition-all ${
-                  viewMode === 'list' ? 'bg-surface-active text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="List view"
-              >
-                <SymbolIcon name="list.bullet" className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Content Explorer Canvas */}
-        {loading ? (
-          <div className="flex-1 flex flex-col items-center justify-center py-20 text-slate-400 space-y-3">
-            <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-8 h-8 animate-spin text-cyan-400" />
-            <p className="text-xs">Reading file catalog...</p>
-          </div>
-        ) : error ? (
-          <div className="p-8 rounded-3xl bg-surface-card border border-surface-border text-center py-16 space-y-3">
-            <SymbolIcon name="exclamationmark.triangle.fill" className="w-8 h-8 mx-auto text-amber-400" />
-            <p className="text-sm font-semibold text-slate-200">{error}</p>
-            <button
-              onClick={() => loadFiles(currentPath)}
-              className="px-4 py-2 bg-surface hover:bg-surface-hover text-xs font-semibold rounded-xl border border-surface-border text-slate-300"
-            >
-              Retry
-            </button>
-          </div>
-        ) : filteredItems.length === 0 ? (
-          /* Empty State */
-          <div className="flex-1 rounded-3xl bg-surface-card/60 border border-surface-border/60 p-12 text-center flex flex-col items-center justify-center min-h-[350px] space-y-4">
-            <div className="w-16 h-16 rounded-3xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shadow-inner">
-              <SymbolIcon name="folder.fill" className="w-8 h-8" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">This folder is empty</h3>
-              <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                Drag and drop files or entire folders here to upload.
-              </p>
-            </div>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
-            >
-              <SymbolIcon name="arrow.up.document.fill" className="w-3.5 h-3.5" />
-              <span>Upload</span>
-            </button>
-          </div>
-        ) : viewMode === 'grid' ? (
-          /* Grid View */
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
-            {filteredItems.map((item) => {
-              const isFolder = item.type === 'folder';
-              const folderColor = item.color || '#3b82f6';
-              return (
-                <div
-                  key={item.path}
-                  onClick={() => {
-                    if (isFolder) setCurrentPath(item.path);
-                    else openPreview(item);
-                  }}
-                  className="group relative p-4 rounded-2xl bg-surface-card hover:bg-surface-hover border border-surface-border hover:border-cyan-500/40 transition-all flex flex-col justify-between cursor-pointer select-none"
+            {/* Folder Subtree (Windows Explorer Style) */}
+            <div className="space-y-2 flex-1">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <SymbolIcon name="folder.fill" className="w-3 h-3 text-cyan-400" />
+                  <span>Folders</span>
+                </span>
+                <button
+                  onClick={() => loadSidebarData()}
+                  title="Refresh folder tree"
+                  className="p-1 hover:bg-surface rounded text-slate-400 hover:text-white"
                 >
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div
-                        style={isFolder ? { backgroundColor: `${folderColor}18`, borderColor: `${folderColor}40`, color: folderColor } : undefined}
-                        className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${
-                          isFolder
-                            ? 'group-hover:scale-105 shadow-sm'
-                            : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 group-hover:scale-105'
+                  <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-3 h-3" />
+                </button>
+              </div>
+
+              <div className="space-y-0.5 max-h-[360px] overflow-y-auto pr-1">
+                {/* Root Node */}
+                <div
+                  onClick={() => setCurrentPath('')}
+                  className={`flex items-center gap-1.5 py-1.5 px-2 rounded-xl text-xs cursor-pointer transition-all ${
+                    currentPath === ''
+                      ? 'bg-cyan-500/15 text-cyan-300 font-bold border-l-2 border-cyan-400'
+                      : 'text-slate-300 hover:bg-surface-hover hover:text-white'
+                  }`}
+                >
+                  <SymbolIcon name="externaldrive.fill" className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
+                  <span className="truncate font-semibold">My Files</span>
+                </div>
+
+                {/* Subtree Nodes */}
+                {folderTree.map((node) => renderTreeNode(node, 1))}
+              </div>
+            </div>
+
+            {/* Storage Usage Panel (Bottom of Sidebar) */}
+            <div className="pt-3 border-t border-surface-border space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <SymbolIcon name="internaldrive.fill" className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Storage</span>
+                </span>
+                <span className="font-mono text-xs font-bold text-cyan-300">
+                  {formatBytes(storageUsage?.usedBytes || 0)}
+                </span>
+              </div>
+
+              <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
+                  style={{ width: `${Math.min(100, Math.max(5, ((storageUsage?.usedBytes || 0) / (1024 * 1024 * 1024)) * 100))}%` }}
+                />
+              </div>
+
+              <div className="flex justify-between text-[10px] text-slate-400">
+                <span>{storageUsage?.fileCount || 0} files</span>
+                <span>{storageUsage?.folderCount || 0} folders</span>
+              </div>
+            </div>
+          </aside>
+
+          {/* RIGHT EXPLORER CANVAS */}
+          <div className="flex-1 min-w-0 flex flex-col space-y-4">
+            {/* Navigation Breadcrumbs & Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface-card border border-surface-border">
+              {/* Breadcrumb row */}
+              <div className="flex items-center gap-1.5 text-xs overflow-x-auto py-0.5">
+                <button
+                  onClick={() => setCurrentPath('')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all ${
+                    currentPath === ''
+                      ? 'font-bold text-white bg-surface-active'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                  }`}
+                >
+                  <SymbolIcon name="externaldrive.fill" className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>My Files</span>
+                </button>
+
+                {pathSegments.map((segment, index) => {
+                  const segPath = pathSegments.slice(0, index + 1).join('/');
+                  const isLast = index === pathSegments.length - 1;
+                  return (
+                    <React.Fragment key={segPath}>
+                      <span className="text-slate-600 font-mono">/</span>
+                      <button
+                        onClick={() => setCurrentPath(segPath)}
+                        className={`px-2.5 py-1 rounded-lg transition-all ${
+                          isLast
+                            ? 'font-bold text-white bg-surface-active'
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
                         }`}
                       >
-                        <SymbolIcon name={getFileSymbol(item)} className="w-6 h-6" />
-                      </div>
+                        {segment}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
 
-                      {/* Item Actions Hover Buttons */}
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                        {!isFolder && (
-                          <>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openPreview(item);
-                              }}
-                              title="Preview"
-                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-cyan-400"
-                            >
-                              <SymbolIcon name="eye.fill" className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                api.cloud.downloadFile(item.path);
-                              }}
-                              title="Download"
-                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
-                            >
-                              <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setShareItemTarget(item);
-                                setShareExpiry(null);
-                                setSharePin('');
-                                setGeneratedPermanentLink(null);
-                              }}
-                              title="Share Link"
-                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-cyan-400"
-                            >
-                              <SymbolIcon name="link" className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditItemTarget(item);
-                            setEditNameValue(item.name);
-                            setEditColorValue(item.color || '#3b82f6');
-                          }}
-                          title={isFolder ? 'Edit Folder & Color' : 'Rename File'}
-                          className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
-                        >
-                          <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenMoveModal(item);
-                          }}
-                          title="Move"
-                          className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
-                        >
-                          <SymbolIcon name="folder.fill" className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(item);
-                          }}
-                          title="Delete"
-                          className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-red-400"
-                        >
-                          <SymbolIcon name="trash.fill" className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-bold text-white truncate" title={item.name}>
-                        {item.name}
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        {isFolder ? 'Folder' : formatBytes(item.size_bytes)}
-                      </p>
-                    </div>
-                  </div>
+              {/* Search & View Mode */}
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <SymbolIcon name="magnifyingglass" className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search files..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 rounded-xl bg-surface border border-surface-border text-xs text-white focus:outline-none focus:ring-1 focus:ring-cyan-500 w-36 sm:w-48 placeholder:text-slate-500"
+                  />
                 </div>
-              );
-            })}
-          </div>
-        ) : (
-          /* List View */
-          <div className="rounded-2xl bg-surface-card border border-surface-border overflow-hidden">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-surface-border bg-surface/60 text-slate-400">
-                  <th className="text-left px-4 py-2.5 font-semibold">Name</th>
-                  <th className="text-left px-4 py-2.5 font-semibold">Size</th>
-                  <th className="text-left px-4 py-2.5 font-semibold">Modified</th>
-                  <th className="text-right px-4 py-2.5 font-semibold">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+
+                <div className="flex items-center p-0.5 rounded-xl bg-surface border border-surface-border">
+                  <button
+                    onClick={() => setViewMode('grid')}
+                    className={`p-1.5 rounded-lg transition-all ${
+                      viewMode === 'grid' ? 'bg-surface-active text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Grid view"
+                  >
+                    <SymbolIcon name="square.grid.2x2.fill" className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode('list')}
+                    className={`p-1.5 rounded-lg transition-all ${
+                      viewMode === 'list' ? 'bg-surface-active text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="List view"
+                  >
+                    <SymbolIcon name="list.bullet" className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Content Explorer Canvas */}
+            {loading ? (
+              <div className="flex-1 flex flex-col items-center justify-center py-20 text-slate-400 space-y-3">
+                <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-8 h-8 animate-spin text-cyan-400" />
+                <p className="text-xs">Reading file catalog...</p>
+              </div>
+            ) : error ? (
+              <div className="p-8 rounded-3xl bg-surface-card border border-surface-border text-center py-16 space-y-3">
+                <SymbolIcon name="exclamationmark.triangle.fill" className="w-8 h-8 mx-auto text-amber-400" />
+                <p className="text-sm font-semibold text-slate-200">{error}</p>
+                <button
+                  onClick={() => loadFiles(currentPath)}
+                  className="px-4 py-2 bg-surface hover:bg-surface-hover text-xs font-semibold rounded-xl border border-surface-border text-slate-300"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : filteredItems.length === 0 ? (
+              /* Empty State */
+              <div className="flex-1 rounded-3xl bg-surface-card/60 border border-surface-border/60 p-12 text-center flex flex-col items-center justify-center min-h-[350px] space-y-4">
+                <div className="w-16 h-16 rounded-3xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shadow-inner">
+                  <SymbolIcon name="folder.fill" className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">This folder is empty</h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm">
+                    Drag and drop files or entire folders here to upload.
+                  </p>
+                </div>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-1.5"
+                >
+                  <SymbolIcon name="arrow.up.document.fill" className="w-3.5 h-3.5" />
+                  <span>Upload</span>
+                </button>
+              </div>
+            ) : viewMode === 'grid' ? (
+              /* Grid View */
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
                 {filteredItems.map((item) => {
                   const isFolder = item.type === 'folder';
                   const folderColor = item.color || '#3b82f6';
+                  const pinned = isFolder && isFolderPinned(item.path);
+
                   return (
-                    <tr
+                    <div
                       key={item.path}
                       onClick={() => {
                         if (isFolder) setCurrentPath(item.path);
                         else openPreview(item);
                       }}
-                      className="border-b border-surface-border/40 hover:bg-surface-hover/60 transition-colors group cursor-pointer"
+                      className="group relative p-4 rounded-2xl bg-surface-card hover:bg-surface-hover border border-surface-border hover:border-cyan-500/40 transition-all flex flex-col justify-between cursor-pointer select-none"
                     >
-                      <td className="px-4 py-3 font-semibold text-white flex items-center gap-2.5 max-w-md truncate">
-                        <div
-                          style={isFolder ? { color: folderColor } : undefined}
-                          className={isFolder ? '' : 'text-cyan-400'}
-                        >
-                          <SymbolIcon name={getFileSymbol(item)} className="w-4 h-4" />
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between">
+                          <div
+                            style={isFolder ? { backgroundColor: `${folderColor}18`, borderColor: `${folderColor}40`, color: folderColor } : undefined}
+                            className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all ${
+                              isFolder
+                                ? 'group-hover:scale-105 shadow-sm'
+                                : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20 group-hover:scale-105'
+                            }`}
+                          >
+                            <SymbolIcon name={getFileSymbol(item)} className="w-6 h-6" />
+                          </div>
+
+                          {/* Item Actions Hover Buttons */}
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                            {isFolder && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  togglePinFolder(item.path, item.name, item.color || undefined);
+                                }}
+                                title={pinned ? 'Unpin from sidebar' : 'Pin to sidebar'}
+                                className={`p-1.5 rounded-lg bg-surface hover:bg-surface-active transition-colors ${
+                                  pinned ? 'text-cyan-400' : 'text-slate-300 hover:text-white'
+                                }`}
+                              >
+                                <SymbolIcon name="pin.fill" className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {!isFolder && (
+                              <>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openPreview(item);
+                                  }}
+                                  title="Preview"
+                                  className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-cyan-400"
+                                >
+                                  <SymbolIcon name="eye.fill" className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    api.cloud.downloadFile(item.path);
+                                  }}
+                                  title="Download"
+                                  className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
+                                >
+                                  <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShareItemTarget(item);
+                                    setShareExpiry(null);
+                                    setSharePin('');
+                                    setGeneratedPermanentLink(null);
+                                  }}
+                                  title="Share Link"
+                                  className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-cyan-400"
+                                >
+                                  <SymbolIcon name="link" className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditItemTarget(item);
+                                setEditNameValue(item.name);
+                                setEditColorValue(item.color || '#3b82f6');
+                              }}
+                              title={isFolder ? 'Edit Folder & Color' : 'Rename File'}
+                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
+                            >
+                              <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenMoveModal(item);
+                              }}
+                              title="Move"
+                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-white"
+                            >
+                              <SymbolIcon name="folder.fill" className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(item);
+                              }}
+                              title="Delete"
+                              className="p-1.5 rounded-lg bg-surface hover:bg-surface-active text-slate-300 hover:text-red-400"
+                            >
+                              <SymbolIcon name="trash.fill" className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                        <span className="truncate" title={item.name}>
-                          {item.name}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-400">{isFolder ? '—' : formatBytes(item.size_bytes)}</td>
-                      <td className="px-4 py-3 text-slate-400">{new Date(item.modified_at).toLocaleDateString()}</td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {!isFolder && (
-                            <>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openPreview(item);
-                                }}
-                                title="Preview"
-                                className="p-1 rounded bg-surface text-slate-300 hover:text-cyan-400"
-                              >
-                                <SymbolIcon name="eye.fill" className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  api.cloud.downloadFile(item.path);
-                                }}
-                                title="Download"
-                                className="p-1 rounded bg-surface text-slate-300 hover:text-white"
-                              >
-                                <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShareItemTarget(item);
-                                  setShareExpiry(null);
-                                  setSharePin('');
-                                  setGeneratedPermanentLink(null);
-                                }}
-                                title="Share Link"
-                                className="p-1 rounded bg-surface text-slate-300 hover:text-cyan-400"
-                              >
-                                <SymbolIcon name="link" className="w-3.5 h-3.5" />
-                              </button>
-                            </>
-                          )}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditItemTarget(item);
-                              setEditNameValue(item.name);
-                              setEditColorValue(item.color || '#3b82f6');
-                            }}
-                            title={isFolder ? 'Edit Folder & Color' : 'Rename'}
-                            className="p-1 rounded bg-surface text-slate-300 hover:text-white"
-                          >
-                            <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenMoveModal(item);
-                            }}
-                            title="Move"
-                            className="p-1 rounded bg-surface text-slate-300 hover:text-white"
-                          >
-                            <SymbolIcon name="folder.fill" className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(item);
-                            }}
-                            title="Delete"
-                            className="p-1 rounded bg-surface text-slate-300 hover:text-red-400"
-                          >
-                            <SymbolIcon name="trash.fill" className="w-3.5 h-3.5" />
-                          </button>
+
+                        <div>
+                          <p className="text-xs font-bold text-white truncate" title={item.name}>
+                            {item.name}
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            {isFolder ? 'Folder' : formatBytes(item.size_bytes)}
+                          </p>
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            ) : (
+              /* List View */
+              <div className="rounded-2xl bg-surface-card border border-surface-border overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-surface-border bg-surface/60 text-slate-400">
+                      <th className="text-left px-4 py-2.5 font-semibold">Name</th>
+                      <th className="text-left px-4 py-2.5 font-semibold">Size</th>
+                      <th className="text-left px-4 py-2.5 font-semibold">Modified</th>
+                      <th className="text-right px-4 py-2.5 font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.map((item) => {
+                      const isFolder = item.type === 'folder';
+                      const folderColor = item.color || '#3b82f6';
+                      const pinned = isFolder && isFolderPinned(item.path);
+
+                      return (
+                        <tr
+                          key={item.path}
+                          onClick={() => {
+                            if (isFolder) setCurrentPath(item.path);
+                            else openPreview(item);
+                          }}
+                          className="border-b border-surface-border/40 hover:bg-surface-hover/60 transition-colors group cursor-pointer"
+                        >
+                          <td className="px-4 py-3 font-semibold text-white flex items-center gap-2.5 max-w-md truncate">
+                            <div
+                              style={isFolder ? { color: folderColor } : undefined}
+                              className={isFolder ? '' : 'text-cyan-400'}
+                            >
+                              <SymbolIcon name={getFileSymbol(item)} className="w-4 h-4" />
+                            </div>
+                            <span className="truncate" title={item.name}>
+                              {item.name}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-400">{isFolder ? '—' : formatBytes(item.size_bytes)}</td>
+                          <td className="px-4 py-3 text-slate-400">{new Date(item.modified_at).toLocaleDateString()}</td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {isFolder && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    togglePinFolder(item.path, item.name, item.color || undefined);
+                                  }}
+                                  title={pinned ? 'Unpin' : 'Pin to sidebar'}
+                                  className={`p-1 rounded bg-surface transition-colors ${
+                                    pinned ? 'text-cyan-400' : 'text-slate-300 hover:text-white'
+                                  }`}
+                                >
+                                  <SymbolIcon name="pin.fill" className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {!isFolder && (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openPreview(item);
+                                    }}
+                                    title="Preview"
+                                    className="p-1 rounded bg-surface text-slate-300 hover:text-cyan-400"
+                                  >
+                                    <SymbolIcon name="eye.fill" className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      api.cloud.downloadFile(item.path);
+                                    }}
+                                    title="Download"
+                                    className="p-1 rounded bg-surface text-slate-300 hover:text-white"
+                                  >
+                                    <SymbolIcon name="arrow.down.document.fill" className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setShareItemTarget(item);
+                                      setShareExpiry(null);
+                                      setSharePin('');
+                                      setGeneratedPermanentLink(null);
+                                    }}
+                                    title="Share Link"
+                                    className="p-1 rounded bg-surface text-slate-300 hover:text-cyan-400"
+                                  >
+                                    <SymbolIcon name="link" className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditItemTarget(item);
+                                  setEditNameValue(item.name);
+                                  setEditColorValue(item.color || '#3b82f6');
+                                }}
+                                title={isFolder ? 'Edit Folder & Color' : 'Rename'}
+                                className="p-1 rounded bg-surface text-slate-300 hover:text-white"
+                              >
+                                <SymbolIcon name="pencil" className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenMoveModal(item);
+                                }}
+                                title="Move"
+                                className="p-1 rounded bg-surface text-slate-300 hover:text-white"
+                              >
+                                <SymbolIcon name="folder.fill" className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(item);
+                                }}
+                                title="Delete"
+                                className="p-1 rounded bg-surface text-slate-300 hover:text-red-400"
+                              >
+                                <SymbolIcon name="trash.fill" className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </main>
 
       {/* IN-SITE FILE PREVIEW MODAL */}

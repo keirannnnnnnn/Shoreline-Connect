@@ -110,6 +110,34 @@ cloudRouter.get('/files', (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
+ * GET /api/cloud/tree
+ * Return recursive directory tree structure for sidebar navigation
+ */
+cloudRouter.get('/tree', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const username = req.user!.username;
+    const tree = CloudService.getFolderTree(username);
+    return res.json({ tree });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to get folder tree' });
+  }
+});
+
+/**
+ * GET /api/cloud/usage
+ * Return user storage consumption stats
+ */
+cloudRouter.get('/usage', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const username = req.user!.username;
+    const usage = CloudService.getUserStorageUsage(username);
+    return res.json(usage);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to get storage usage' });
+  }
+});
+
+/**
  * POST /api/cloud/folder
  * Create new folder in user's personal drive
  */
