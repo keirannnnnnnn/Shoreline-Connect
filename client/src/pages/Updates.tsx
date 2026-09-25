@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../lib/api';
-import { useAuth } from '../context/AuthContext';
+import { api } from '../lib/api.js';
+import { useAuth } from '../context/AuthContext.js';
+import { Navbar } from '../components/Navbar.js';
+import { SymbolIcon } from '../components/SymbolIcon.js';
 import {
   UpdatesOverview,
   SoftwareGroup,
@@ -10,7 +12,7 @@ import {
   AgentBuildItem,
   ScriptItem,
   ScriptParameterDef,
-} from '../types';
+} from '../types/index.js';
 
 export const Updates: React.FC = () => {
   const { user } = useAuth();
@@ -31,6 +33,9 @@ export const Updates: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [scriptSearch, setScriptSearch] = useState('');
   const [jobStatusFilter, setJobStatusFilter] = useState('all');
+
+  // Accordion for compact Software Inventory
+  const [expandedSoftwareKey, setExpandedSoftwareKey] = useState<string | null>(null);
 
   // Drawers & Modals
   const [selectedJobLogs, setSelectedJobLogs] = useState<UpdateJob | null>(null);
@@ -105,7 +110,6 @@ export const Updates: React.FC = () => {
   useEffect(() => {
     loadData();
     const interval = setInterval(() => {
-      // Auto-refresh jobs and agents
       api.updates.getJobs(100).then(setJobs).catch(() => {});
       api.updates.getAgents().then(setAgents).catch(() => {});
       api.updates.getOverview().then(setOverview).catch(() => {});
@@ -309,7 +313,6 @@ export const Updates: React.FC = () => {
     }
     setRuntimeParams(initialParams);
 
-    // Filter compatible online devices by default
     const compatibleDevs = agents
       .filter((a) => (scr.target_os === 'all' || a.os === scr.target_os) && a.status === 'online')
       .map((a) => a.deviceId);
@@ -348,709 +351,858 @@ export const Updates: React.FC = () => {
     }
   };
 
+  const filteredInventory = inventory.filter((group) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      group.name.toLowerCase().includes(q) ||
+      (group.publisher && group.publisher.toLowerCase().includes(q)) ||
+      group.installs.some((inst) => inst.deviceName.toLowerCase().includes(q) || inst.version?.toLowerCase().includes(q))
+    );
+  });
+
   return (
-    <div className="space-y-6">
-      {/* Toast alert message */}
-      {actionMessage && (
-        <div
-          className={`p-4 rounded-xl flex items-center justify-between shadow-lg backdrop-blur-md border ${
-            actionMessage.type === 'success'
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-              : 'bg-red-500/10 border-red-500/30 text-red-300'
-          }`}
-        >
-          <div className="flex items-center space-x-3">
-            <span className="text-xl">{actionMessage.type === 'success' ? '✅' : '❌'}</span>
-            <span className="font-medium text-sm">{actionMessage.text}</span>
-          </div>
-          <button onClick={() => setActionMessage(null)} className="text-xs opacity-60 hover:opacity-100">
-            Dismiss
-          </button>
-        </div>
-      )}
+    <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans selection:bg-brand-500/30 selection:text-brand-200">
+      <Navbar />
 
-      {/* Header & Subnav */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div>
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">Updates & Fleet Management</h1>
-              <p className="text-sm text-slate-400">Software discovery, agent updates, and remote script automation</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Action button bar */}
-        <div className="flex items-center space-x-3">
-          {isAdmin && (
-            <>
-              <button
-                onClick={handleRescanAll}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-sm font-medium flex items-center space-x-2 transition"
-                title="Queue inventory discovery scan across all monitored devices"
-              >
-                <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                <span>Rescan All</span>
-              </button>
-
-              <button
-                onClick={() => handleOpenScriptModal()}
-                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-medium flex items-center space-x-2 shadow-lg shadow-cyan-600/20 transition"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                <span>New Script</span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Tabs Bar */}
-      <div className="flex items-center space-x-2 border-b border-slate-800/80 overflow-x-auto pb-1 text-sm font-medium">
-        {[
-          { key: 'overview', label: 'Overview', icon: '📊' },
-          { key: 'inventory', label: 'Software Inventory', icon: '📦', count: inventory.length },
-          { key: 'scripts', label: 'Script Library', icon: '⚡', count: scripts.length },
-          { key: 'agents', label: 'Agents', icon: '🤖', count: agents.length },
-          { key: 'jobs', label: 'Jobs Queue', icon: '⏳', count: jobs.filter(j => ['queued', 'waiting_for_device', 'running'].includes(j.status)).length || undefined },
-          { key: 'audit', label: 'Audit Log', icon: '🛡️' },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key as any)}
-            className={`px-4 py-2.5 rounded-xl flex items-center space-x-2 whitespace-nowrap transition ${
-              activeTab === tab.key
-                ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        {/* Toast alert message */}
+        {actionMessage && (
+          <div
+            className={`p-3.5 rounded-2xl flex items-center justify-between shadow-lg backdrop-blur-md border text-xs ${
+              actionMessage.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : 'bg-red-500/10 border-red-500/30 text-red-300'
             }`}
           >
-            <span>{tab.icon}</span>
-            <span>{tab.label}</span>
-            {tab.count !== undefined && tab.count > 0 && (
-              <span className={`text-xs px-2 py-0.5 rounded-full ${activeTab === tab.key ? 'bg-cyan-400/20 text-cyan-300' : 'bg-slate-800 text-slate-400'}`}>
-                {tab.count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* =========================================================================
-          TAB 1: OVERVIEW
-          ========================================================================= */}
-      {activeTab === 'overview' && (
-        <div className="space-y-6">
-          {/* KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm">
-              <div className="flex items-center justify-between text-slate-400 text-sm">
-                <span>Fleet Software Records</span>
-                <span className="text-xl">📦</span>
-              </div>
-              <div className="text-3xl font-bold text-white mt-2">{overview?.totalTrackedSoftware ?? 0}</div>
-              <div className="text-xs text-slate-500 mt-1">Discovered across all devices</div>
-            </div>
-
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm">
-              <div className="flex items-center justify-between text-slate-400 text-sm">
-                <span>Monitored Agents</span>
-                <span className="text-xl">🤖</span>
-              </div>
-              <div className="text-3xl font-bold text-cyan-400 mt-2">
-                {overview?.agentsOnline ?? 0} <span className="text-lg font-normal text-slate-500">/ {overview?.totalMonitoredAgents ?? agents.length} online</span>
-              </div>
-              <div className="text-xs text-emerald-400 mt-1">15s reporting interval</div>
-            </div>
-
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm">
-              <div className="flex items-center justify-between text-slate-400 text-sm">
-                <span>Pending Reboots</span>
-                <span className="text-xl">🔄</span>
-              </div>
-              <div className={`text-3xl font-bold mt-2 ${(overview?.devicesPendingReboot ?? 0) > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
-                {overview?.devicesPendingReboot ?? 0}
-              </div>
-              <div className="text-xs text-slate-500 mt-1">Registry/system flags</div>
-            </div>
-
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm">
-              <div className="flex items-center justify-between text-slate-400 text-sm">
-                <span>Failed Jobs (7d)</span>
-                <span className="text-xl">⚠️</span>
-              </div>
-              <div className={`text-3xl font-bold mt-2 ${(overview?.failedJobsLast7Days ?? 0) > 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                {overview?.failedJobsLast7Days ?? 0}
-              </div>
-              <div className="text-xs text-slate-500 mt-1">Requires admin review</div>
-            </div>
-          </div>
-
-          {/* Quick Actions Grid */}
-          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Quick Management Actions</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <button
-                onClick={() => setActiveTab('inventory')}
-                className="p-4 rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-left transition flex items-start space-x-3"
-              >
-                <span className="text-2xl">🔍</span>
-                <div>
-                  <div className="font-medium text-slate-200">Explore Software Inventory</div>
-                  <div className="text-xs text-slate-400 mt-1">Search packages, verify versions, inspect silent uninstall strings</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('scripts')}
-                className="p-4 rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-left transition flex items-start space-x-3"
-              >
-                <span className="text-2xl">⚡</span>
-                <div>
-                  <div className="font-medium text-slate-200">Run Remote Script</div>
-                  <div className="text-xs text-slate-400 mt-1">Execute PowerShell, batch, or bash scripts across devices</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('agents')}
-                className="p-4 rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-left transition flex items-start space-x-3"
-              >
-                <span className="text-2xl">🤖</span>
-                <div>
-                  <div className="font-medium text-slate-200">Manage Agent Versions</div>
-                  <div className="text-xs text-slate-400 mt-1">Upload new builds, promote defaults, and dispatch self-updates</div>
-                </div>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
-          TAB 2: SOFTWARE INVENTORY
-          ========================================================================= */}
-      {activeTab === 'inventory' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="relative flex-1 w-full">
-              <input
-                type="text"
-                placeholder="Search software name, publisher, or version across fleet..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && loadData()}
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 pl-10 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+            <div className="flex items-center gap-2.5">
+              <SymbolIcon
+                name={actionMessage.type === 'success' ? 'checkmark.circle.fill' : 'exclamationmark.triangle.fill'}
+                className="w-4 h-4"
               />
-              <span className="absolute left-3.5 top-3 text-slate-500">🔍</span>
+              <span className="font-medium">{actionMessage.text}</span>
             </div>
-            {isAdmin && (
-              <button
-                onClick={handleRescanAll}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-sm font-medium flex items-center space-x-2 shrink-0 transition"
-              >
-                <span>🔄</span>
-                <span>Rescan All Fleet</span>
-              </button>
-            )}
+            <button onClick={() => setActionMessage(null)} className="opacity-60 hover:opacity-100 text-xs">
+              Dismiss
+            </button>
           </div>
+        )}
 
-          {inventory.length === 0 ? (
-            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-12 text-center text-slate-500">
-              <div className="text-3xl mb-2">📦</div>
-              <div>No software inventory records found.</div>
-              <div className="text-xs text-slate-600 mt-1">Agents periodically scan every 6 hours, or click "Rescan All" to trigger now.</div>
-            </div>
-          ) : (
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/60">
-              {inventory.map((group, idx) => (
-                <div key={idx} className="p-4 hover:bg-slate-800/30 transition">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-base font-semibold text-white flex items-center space-x-2">
-                        <span>{group.name}</span>
-                        {group.publisher && <span className="text-xs font-normal text-slate-400">({group.publisher})</span>}
-                      </h3>
-                      <div className="text-xs text-slate-500 mt-1">Installed on {group.installs.length} device{group.installs.length === 1 ? '' : 's'}</div>
-                    </div>
-                  </div>
+        {/* Page Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
+              <SymbolIcon name="arrow.clockwise" className="w-6 h-6 text-brand-400" />
+              <span>Updates & Software</span>
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
+              Fleet software discovery, agent updates, and remote script automation.
+            </p>
+          </div>
+        </div>
 
-                  {/* Installs Chips */}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {group.installs.map((inst) => (
-                      <div
-                        key={inst.id}
-                        className="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700/60 text-xs text-slate-300 flex items-center space-x-2"
-                      >
-                        <span className="font-medium text-cyan-400">{inst.deviceName}</span>
-                        <span className="text-slate-400">v{inst.version || 'unknown'}</span>
-                        {inst.source && <span className="px-1.5 py-0.2 bg-slate-900 rounded text-[10px] text-slate-400 uppercase">{inst.source}</span>}
-                      </div>
-                    ))}
-                  </div>
+        {/* Unified Sub-Tabs Bar */}
+        <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-surface border border-surface-border overflow-x-auto">
+          {[
+            { key: 'overview', label: 'Overview', icon: 'square.grid.2x2' },
+            { key: 'inventory', label: 'Software Inventory', icon: 'shippingbox.fill', count: inventory.length },
+            { key: 'scripts', label: 'Script Library', icon: 'chevron.left.forwardslash.chevron.right', count: scripts.length },
+            { key: 'agents', label: 'Agents', icon: 'macbook.and.iphone', count: agents.length },
+            {
+              key: 'jobs',
+              label: 'Jobs Queue',
+              icon: 'clock.fill',
+              count: jobs.filter((j) => ['queued', 'waiting_for_device', 'running'].includes(j.status)).length || undefined,
+            },
+            { key: 'audit', label: 'Audit Log', icon: 'shield.fill' },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key as any)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === tab.key
+                  ? 'bg-surface-active text-white border border-surface-borderLight shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+              }`}
+            >
+              <SymbolIcon name={tab.icon} className="w-3.5 h-3.5" />
+              <span>{tab.label}</span>
+              {tab.count !== undefined && tab.count > 0 && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                    activeTab === tab.key ? 'bg-brand-500/20 text-brand-300' : 'bg-surface text-slate-400'
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* =========================================================================
+            TAB 1: OVERVIEW
+            ========================================================================= */}
+        {activeTab === 'overview' && (
+          <div className="space-y-6">
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-surface-card border border-surface-border rounded-2xl p-4 sm:p-5 hover:border-surface-borderLight transition-all">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+                  <span>Tracked Software</span>
+                  <SymbolIcon name="shippingbox.fill" className="w-4 h-4 text-brand-400" />
                 </div>
-              ))}
+                <div className="text-2xl font-bold text-white tracking-tight mt-2">
+                  {overview?.totalTrackedSoftware ?? 0}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">Discovered across all devices</div>
+              </div>
+
+              <div className="bg-surface-card border border-surface-border rounded-2xl p-4 sm:p-5 hover:border-surface-borderLight transition-all">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+                  <span>Monitored Agents</span>
+                  <SymbolIcon name="waveform.path.ecg" className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="text-2xl font-bold text-white tracking-tight mt-2 flex items-baseline gap-1.5">
+                  <span className="text-emerald-400">{overview?.agentsOnline ?? 0}</span>
+                  <span className="text-xs font-normal text-slate-500">/ {overview?.totalMonitoredAgents ?? agents.length} online</span>
+                </div>
+                <div className="text-[11px] text-emerald-400 mt-1">15s reporting interval</div>
+              </div>
+
+              <div className="bg-surface-card border border-surface-border rounded-2xl p-4 sm:p-5 hover:border-surface-borderLight transition-all">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+                  <span>Pending Reboots</span>
+                  <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-4 h-4 text-amber-400" />
+                </div>
+                <div
+                  className={`text-2xl font-bold tracking-tight mt-2 ${
+                    (overview?.devicesPendingReboot ?? 0) > 0 ? 'text-amber-400' : 'text-white'
+                  }`}
+                >
+                  {overview?.devicesPendingReboot ?? 0}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">Registry / system flags</div>
+              </div>
+
+              <div className="bg-surface-card border border-surface-border rounded-2xl p-4 sm:p-5 hover:border-surface-borderLight transition-all">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+                  <span>Failed Jobs (7d)</span>
+                  <SymbolIcon name="exclamationmark.triangle.fill" className="w-4 h-4 text-red-400" />
+                </div>
+                <div
+                  className={`text-2xl font-bold tracking-tight mt-2 ${
+                    (overview?.failedJobsLast7Days ?? 0) > 0 ? 'text-red-400' : 'text-white'
+                  }`}
+                >
+                  {overview?.failedJobsLast7Days ?? 0}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">Requires review</div>
+              </div>
             </div>
-          )}
-        </div>
-      )}
 
-      {/* =========================================================================
-          TAB 3: SCRIPT LIBRARY (PHASE 2)
-          ========================================================================= */}
-      {activeTab === 'scripts' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="relative flex-1 w-full">
-              <input
-                type="text"
-                placeholder="Search scripts by name or description..."
-                value={scriptSearch}
-                onChange={(e) => setScriptSearch(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 pl-10 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-              />
-              <span className="absolute left-3.5 top-3 text-slate-500">🔍</span>
-            </div>
-            {isAdmin && (
-              <button
-                onClick={() => handleOpenScriptModal()}
-                className="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-medium flex items-center space-x-2 shrink-0 shadow-lg shadow-cyan-600/20 transition"
-              >
-                <span>➕</span>
-                <span>New Script</span>
-              </button>
-            )}
-          </div>
-
-          {scripts.length === 0 ? (
-            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-12 text-center text-slate-500">
-              <div className="text-3xl mb-2">⚡</div>
-              <div>No scripts saved in library.</div>
-              <div className="text-xs text-slate-600 mt-1">Create PowerShell, batch, or bash scripts with runtime parameters.</div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {scripts
-                .filter((s) => s.name.toLowerCase().includes(scriptSearch.toLowerCase()) || s.description?.toLowerCase().includes(scriptSearch.toLowerCase()))
-                .map((scr) => (
-                  <div key={scr.id} className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between hover:border-slate-700 transition">
-                    <div>
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <h3 className="text-base font-semibold text-white flex items-center space-x-2">
-                            <span>{scr.name}</span>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase font-mono">
-                              {scr.script_type}
-                            </span>
-                          </h3>
-                          {scr.description && <p className="text-sm text-slate-400 mt-1">{scr.description}</p>}
-                        </div>
-                        <span className="text-xs px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 border border-slate-700">
-                          v{scr.latest_version || 1}
-                        </span>
-                      </div>
-
-                      <div className="mt-4 flex items-center space-x-4 text-xs text-slate-500">
-                        <span>Target OS: <strong className="text-slate-300 capitalize">{scr.target_os}</strong></span>
-                        <span>Timeout: <strong className="text-slate-300">{scr.timeout_seconds}s</strong></span>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between">
-                      {isAdmin && (
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => handleOpenScriptModal(scr)}
-                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteScript(scr.id)}
-                            className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-xs font-medium transition"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      )}
-
-                      {isAdmin && (
-                        <button
-                          onClick={() => handleOpenRunScriptModal(scr)}
-                          className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-medium flex items-center space-x-1.5 transition ml-auto"
-                        >
-                          <span>▶</span>
-                          <span>Run on Devices</span>
-                        </button>
-                      )}
-                    </div>
+            {/* Quick Management Shortcuts */}
+            <div className="bg-surface-card border border-surface-border rounded-2xl p-5">
+              <h2 className="text-sm font-bold text-white mb-3">Quick Navigation</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button
+                  onClick={() => setActiveTab('inventory')}
+                  className="p-3.5 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-left transition flex items-start gap-3 group"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 group-hover:scale-105 transition-transform">
+                    <SymbolIcon name="shippingbox.fill" className="w-4 h-4" />
                   </div>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =========================================================================
-          TAB 4: AGENTS MANAGEMENT
-          ========================================================================= */}
-      {activeTab === 'agents' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center space-x-2 text-sm text-slate-400">
-              <span>{agents.length} monitored devices</span>
-              <span>•</span>
-              <span className="text-emerald-400 font-medium">{agents.filter(a => a.status === 'online').length} online</span>
-            </div>
-
-            {isAdmin && (
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={() => setIsBuildsDrawerOpen(true)}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium transition"
-                >
-                  Manage Builds ({agentBuilds.length})
+                  <div>
+                    <div className="text-xs font-semibold text-white">Software Inventory</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">Explore discovered apps & version distribution</div>
+                  </div>
                 </button>
+
                 <button
-                  onClick={() => setIsUploadAgentModalOpen(true)}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium flex items-center space-x-1.5 transition"
+                  onClick={() => setActiveTab('scripts')}
+                  className="p-3.5 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-left transition flex items-start gap-3 group"
                 >
-                  <span>⬆️</span>
-                  <span>Upload Build</span>
+                  <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform">
+                    <SymbolIcon name="chevron.left.forwardslash.chevron.right" className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-white">Script Library</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">PowerShell, batch, and bash automation</div>
+                  </div>
                 </button>
-                {agentBuilds.length > 0 && selectedAgentIds.length > 0 && (
-                  <select
-                    value={bulkTargetBuildId}
-                    onChange={(e) => setBulkTargetBuildId(e.target.value)}
-                    className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-slate-200 focus:ring-1 focus:ring-cyan-500"
+
+                <button
+                  onClick={() => setActiveTab('agents')}
+                  className="p-3.5 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-left transition flex items-start gap-3 group"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 group-hover:scale-105 transition-transform">
+                    <SymbolIcon name="macbook.and.iphone" className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-white">Agent Fleet</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">Push self-updates and manage builds</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 2: COMPACT SOFTWARE INVENTORY
+            ========================================================================= */}
+        {activeTab === 'inventory' && (
+          <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-2 rounded-2xl bg-surface border border-surface-border">
+              <div className="relative w-full sm:w-80">
+                <SymbolIcon name="magnifyingglass" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search software or publisher..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 rounded-xl bg-surface-card border border-surface-border text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                <div className="text-xs text-slate-400 px-2">
+                  <strong className="text-white">{filteredInventory.length}</strong> packages
+                </div>
+                {isAdmin && (
+                  <button
+                    onClick={handleRescanAll}
+                    className="px-3 py-1.5 bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all"
                   >
-                    <option value="">Default Server Build</option>
-                    {agentBuilds.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        v{b.version} ({b.target_os}/{b.target_arch}) {b.is_install_default === 1 ? '★' : ''}
-                      </option>
-                    ))}
-                  </select>
+                    <SymbolIcon name="arrow.clockwise" className="w-3.5 h-3.5" />
+                    <span>Rescan All Fleet</span>
+                  </button>
                 )}
-                <button
-                  onClick={handleBulkAgentUpdate}
-                  disabled={selectedAgentIds.length === 0}
-                  className={`px-4 py-2 rounded-xl text-xs font-medium transition ${
-                    selectedAgentIds.length > 0
-                      ? 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/20'
-                      : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  }`}
-                >
-                  Update Selected ({selectedAgentIds.length})
-                </button>
+              </div>
+            </div>
+
+            {/* Compact Table */}
+            {filteredInventory.length === 0 ? (
+              <div className="py-16 text-center rounded-2xl bg-surface-card border border-surface-border border-dashed p-8">
+                <SymbolIcon name="shippingbox.fill" className="w-8 h-8 mx-auto mb-2 text-slate-500" />
+                <h3 className="text-sm font-bold text-white mb-1">No Software Found</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  {inventory.length === 0
+                    ? 'Agents periodically report installed packages. Click "Rescan All Fleet" to initiate discovery.'
+                    : 'No software records matched your search.'}
+                </p>
+              </div>
+            ) : (
+              <div className="bg-surface-card border border-surface-border rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-surface-border text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-surface-active/50">
+                      <th className="p-3.5 pl-4">Application / Package</th>
+                      <th className="p-3.5">Publisher</th>
+                      <th className="p-3.5">Installed Versions</th>
+                      <th className="p-3.5 text-center">Devices</th>
+                      <th className="p-3.5 pr-4 text-right">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-border/50 text-xs">
+                    {filteredInventory.map((group, idx) => {
+                      const isExpanded = expandedSoftwareKey === group.name;
+                      const uniqueVersions = Array.from(new Set(group.installs.map((i) => i.version || 'Unknown')));
+
+                      return (
+                        <React.Fragment key={idx}>
+                          <tr
+                            onClick={() => setExpandedSoftwareKey(isExpanded ? null : group.name)}
+                            className="hover:bg-surface-hover/60 transition cursor-pointer"
+                          >
+                            <td className="p-3.5 pl-4">
+                              <div className="font-semibold text-white flex items-center gap-2">
+                                <SymbolIcon name="shippingbox.fill" className="w-3.5 h-3.5 text-brand-400 shrink-0" />
+                                <span>{group.name}</span>
+                              </div>
+                            </td>
+                            <td className="p-3.5 text-slate-400">
+                              {group.publisher || <span className="text-slate-600">—</span>}
+                            </td>
+                            <td className="p-3.5">
+                              <div className="flex flex-wrap gap-1">
+                                {uniqueVersions.map((v, vIdx) => {
+                                  const countForVer = group.installs.filter((i) => (i.version || 'Unknown') === v).length;
+                                  return (
+                                    <span
+                                      key={vIdx}
+                                      className="px-2 py-0.5 rounded-lg bg-surface border border-surface-border text-[11px] font-mono text-slate-300"
+                                    >
+                                      {v} <span className="text-slate-500 font-sans">({countForVer})</span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                            <td className="p-3.5 text-center">
+                              <span className="px-2.5 py-0.5 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20 font-semibold text-[11px]">
+                                {group.installs.length}
+                              </span>
+                            </td>
+                            <td className="p-3.5 pr-4 text-right">
+                              <SymbolIcon
+                                name={isExpanded ? 'chevron.up' : 'chevron.down'}
+                                className="w-3.5 h-3.5 text-slate-400 inline-block transition-transform"
+                              />
+                            </td>
+                          </tr>
+
+                          {/* Accordion Per-Device Drilldown */}
+                          {isExpanded && (
+                            <tr className="bg-surface/30">
+                              <td colSpan={5} className="p-3 pl-8 pr-4">
+                                <div className="rounded-xl border border-surface-border bg-surface-card/80 p-3 space-y-2">
+                                  <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                                    Installed Devices Breakdown ({group.installs.length})
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                    {group.installs.map((inst) => (
+                                      <div
+                                        key={inst.id}
+                                        className="p-2.5 rounded-lg bg-surface border border-surface-border flex items-center justify-between text-xs"
+                                      >
+                                        <div className="space-y-0.5">
+                                          <div className="font-semibold text-white flex items-center gap-1.5">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                            <span>{inst.deviceName}</span>
+                                          </div>
+                                          <div className="text-[11px] font-mono text-slate-400">
+                                            v{inst.version || 'unknown'} {inst.arch ? `(${inst.arch})` : ''}
+                                            {inst.source && <span className="ml-1 uppercase text-slate-500">[{inst.source}]</span>}
+                                          </div>
+                                        </div>
+                                        {isAdmin && (
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleRescanDevice(inst.deviceId);
+                                            }}
+                                            className="px-2 py-1 rounded bg-surface-card hover:bg-surface-active text-slate-300 border border-surface-border text-[11px] transition"
+                                            title="Rescan device"
+                                          >
+                                            Rescan
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
+        )}
 
-          {/* Agents Table */}
-          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-900/80">
-                  {isAdmin && (
-                    <th className="p-4 w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectedAgentIds.length === agents.length && agents.length > 0}
-                        onChange={(e) => {
-                          if (e.target.checked) setSelectedAgentIds(agents.map(a => a.deviceId));
-                          else setSelectedAgentIds([]);
-                        }}
-                        className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
-                      />
-                    </th>
-                  )}
-                  <th className="p-4">Device</th>
-                  <th className="p-4">Platform</th>
-                  <th className="p-4">Agent Version</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Last Seen</th>
-                  {isAdmin && <th className="p-4 text-right">Actions</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 text-sm">
-                {agents.map((ag) => {
-                  const isSelected = selectedAgentIds.includes(ag.deviceId);
-                  return (
-                    <tr key={ag.deviceId} className="hover:bg-slate-800/30 transition">
-                      {isAdmin && (
-                        <td className="p-4">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={(e) => {
-                              if (e.target.checked) setSelectedAgentIds([...selectedAgentIds, ag.deviceId]);
-                              else setSelectedAgentIds(selectedAgentIds.filter(id => id !== ag.deviceId));
-                            }}
-                            className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
-                          />
-                        </td>
-                      )}
-                      <td className="p-4">
-                        <div className="font-medium text-white">{ag.deviceName}</div>
-                        <div className="text-xs text-slate-500 font-mono">{ag.host}</div>
-                      </td>
-                      <td className="p-4 text-slate-400 capitalize">
-                        {ag.platform}
-                      </td>
-                      <td className="p-4">
-                        <span className="px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                          v{ag.agentVersion}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          ag.status === 'online' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${ag.status === 'online' ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-                          {ag.status}
-                        </span>
-                      </td>
-                      <td className="p-4 text-xs text-slate-400">
-                        {ag.lastSeenAt ? new Date(ag.lastSeenAt).toLocaleTimeString() : 'Never'}
-                      </td>
-                      {isAdmin && (
-                        <td className="p-4 text-right space-x-2">
-                          <button
-                            onClick={() => handleRescanDevice(ag.deviceId)}
-                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
-                            title="Rescan software inventory"
-                          >
-                            Rescan
-                          </button>
-                          <button
-                            onClick={() => handleSingleAgentUpdate(ag.deviceId)}
-                            className="px-2.5 py-1 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30 text-xs font-medium transition"
-                          >
-                            Push Update
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+        {/* =========================================================================
+            TAB 3: SCRIPT LIBRARY
+            ========================================================================= */}
+        {activeTab === 'scripts' && (
+          <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-2 rounded-2xl bg-surface border border-surface-border">
+              <div className="relative w-full sm:w-80">
+                <SymbolIcon name="magnifyingglass" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search scripts by name..."
+                  value={scriptSearch}
+                  onChange={(e) => setScriptSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 rounded-xl bg-surface-card border border-surface-border text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                />
+              </div>
 
-      {/* =========================================================================
-          TAB 5: JOBS QUEUE
-          ========================================================================= */}
-      {activeTab === 'jobs' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center space-x-2">
-              {['all', 'waiting_for_device', 'queued', 'running', 'succeeded', 'failed'].map((st) => (
+              {isAdmin && (
                 <button
-                  key={st}
-                  onClick={() => setJobStatusFilter(st)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-medium capitalize transition ${
-                    jobStatusFilter === st
-                      ? 'bg-slate-800 text-cyan-400 border border-slate-700'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
+                  onClick={() => handleOpenScriptModal()}
+                  className="px-3.5 py-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all"
                 >
-                  {st.replace(/_/g, ' ')}
+                  <SymbolIcon name="plus" className="w-3.5 h-3.5" />
+                  <span>New Script</span>
                 </button>
-              ))}
+              )}
             </div>
 
-            {isAdmin && selectedJobIds.length > 0 && (
-              <button
-                onClick={handleBulkCancelJobs}
-                className="px-3.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl text-xs font-medium transition"
-              >
-                Cancel Selected ({selectedJobIds.length})
-              </button>
+            {scripts.length === 0 ? (
+              <div className="py-16 text-center rounded-2xl bg-surface-card border border-surface-border border-dashed p-8">
+                <SymbolIcon name="chevron.left.forwardslash.chevron.right" className="w-8 h-8 mx-auto mb-2 text-slate-500" />
+                <h3 className="text-sm font-bold text-white mb-1">No Scripts in Library</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  Create versioned PowerShell, batch, or bash scripts with runtime parameters.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {scripts
+                  .filter(
+                    (s) =>
+                      s.name.toLowerCase().includes(scriptSearch.toLowerCase()) ||
+                      s.description?.toLowerCase().includes(scriptSearch.toLowerCase())
+                  )
+                  .map((scr) => (
+                    <div
+                      key={scr.id}
+                      className="bg-surface-card border border-surface-border rounded-2xl p-4 sm:p-5 flex flex-col justify-between hover:border-surface-borderLight transition-all"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                              <span>{scr.name}</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20 uppercase font-mono">
+                                {scr.script_type}
+                              </span>
+                            </h3>
+                            {scr.description && <p className="text-xs text-slate-400 mt-1">{scr.description}</p>}
+                          </div>
+                          <span className="text-[11px] px-2 py-0.5 rounded-md bg-surface text-slate-400 border border-surface-border font-mono">
+                            v{scr.latest_version || 1}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 flex items-center gap-3 text-xs text-slate-400">
+                          <span>
+                            Target: <strong className="text-slate-200 capitalize">{scr.target_os}</strong>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            Timeout: <strong className="text-slate-200">{scr.timeout_seconds}s</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-surface-border flex items-center justify-between">
+                        {isAdmin && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleOpenScriptModal(scr)}
+                              className="px-2.5 py-1 bg-surface hover:bg-surface-hover text-slate-300 rounded-lg text-xs font-medium border border-surface-border transition"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteScript(scr.id)}
+                              className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-xs font-medium border border-red-500/20 transition"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleOpenRunScriptModal(scr)}
+                            className="px-3 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ml-auto"
+                          >
+                            <SymbolIcon name="play.fill" className="w-3 h-3" />
+                            <span>Run Script</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </div>
             )}
           </div>
+        )}
 
-          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-900/80">
-                  {isAdmin && (
-                    <th className="p-4 w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectedJobIds.length === jobs.filter(j => ['queued', 'waiting_for_device'].includes(j.status)).length && selectedJobIds.length > 0}
-                        onChange={(e) => {
-                          if (e.target.checked) setSelectedJobIds(jobs.filter(j => ['queued', 'waiting_for_device'].includes(j.status)).map(j => j.id));
-                          else setSelectedJobIds([]);
-                        }}
-                        className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
-                      />
-                    </th>
+        {/* =========================================================================
+            TAB 4: AGENTS MANAGEMENT
+            ========================================================================= */}
+        {activeTab === 'agents' && (
+          <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-2 rounded-2xl bg-surface border border-surface-border">
+              <div className="flex items-center gap-2 text-xs text-slate-400 px-2">
+                <span>
+                  <strong className="text-white">{agents.length}</strong> monitored devices
+                </span>
+                <span>•</span>
+                <span className="text-emerald-400 font-medium">
+                  {agents.filter((a) => a.status === 'online').length} online
+                </span>
+              </div>
+
+              {isAdmin && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setIsBuildsDrawerOpen(true)}
+                    className="px-3 py-1.5 bg-surface-card hover:bg-surface-hover text-slate-200 border border-surface-border rounded-xl text-xs font-medium transition"
+                  >
+                    Manage Builds ({agentBuilds.length})
+                  </button>
+                  <button
+                    onClick={() => setIsUploadAgentModalOpen(true)}
+                    className="px-3 py-1.5 bg-surface-card hover:bg-surface-hover text-slate-200 border border-surface-border rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
+                  >
+                    <SymbolIcon name="arrow.up.circle" className="w-3.5 h-3.5 text-brand-400" />
+                    <span>Upload Build</span>
+                  </button>
+
+                  {agentBuilds.length > 0 && selectedAgentIds.length > 0 && (
+                    <select
+                      value={bulkTargetBuildId}
+                      onChange={(e) => setBulkTargetBuildId(e.target.value)}
+                      className="px-2.5 py-1.5 rounded-xl bg-surface-card border border-surface-border text-xs text-slate-200 focus:outline-none"
+                    >
+                      <option value="">Default Server Build</option>
+                      {agentBuilds.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          v{b.version} ({b.target_os}/{b.target_arch}) {b.is_install_default === 1 ? '★' : ''}
+                        </option>
+                      ))}
+                    </select>
                   )}
-                  <th className="p-4">Type</th>
-                  <th className="p-4">Device</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Created</th>
-                  <th className="p-4">By</th>
-                  <th className="p-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 text-sm">
-                {jobs
-                  .filter((j) => jobStatusFilter === 'all' || j.status === jobStatusFilter)
-                  .map((job) => {
-                    const isSelectable = ['queued', 'waiting_for_device'].includes(job.status);
+
+                  <button
+                    onClick={handleBulkAgentUpdate}
+                    disabled={selectedAgentIds.length === 0}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                      selectedAgentIds.length > 0
+                        ? 'bg-brand-600 hover:bg-brand-500 text-white shadow-sm'
+                        : 'bg-surface text-slate-500 cursor-not-allowed border border-surface-border'
+                    }`}
+                  >
+                    Update Selected ({selectedAgentIds.length})
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Agents Table */}
+            <div className="bg-surface-card border border-surface-border rounded-2xl overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-surface-border text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-surface-active/50">
+                    {isAdmin && (
+                      <th className="p-3.5 pl-4 w-10">
+                        <input
+                          type="checkbox"
+                          checked={selectedAgentIds.length === agents.length && agents.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) setSelectedAgentIds(agents.map((a) => a.deviceId));
+                            else setSelectedAgentIds([]);
+                          }}
+                          className="rounded border-surface-border bg-surface text-brand-500 focus:ring-0"
+                        />
+                      </th>
+                    )}
+                    <th className="p-3.5">Device</th>
+                    <th className="p-3.5">Platform</th>
+                    <th className="p-3.5">Agent Version</th>
+                    <th className="p-3.5">Status</th>
+                    <th className="p-3.5">Last Seen</th>
+                    {isAdmin && <th className="p-3.5 pr-4 text-right">Actions</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-border/50 text-xs">
+                  {agents.map((ag) => {
+                    const isSelected = selectedAgentIds.includes(ag.deviceId);
                     return (
-                      <tr key={job.id} className="hover:bg-slate-800/30 transition">
+                      <tr key={ag.deviceId} className="hover:bg-surface-hover/60 transition">
                         {isAdmin && (
-                          <td className="p-4">
-                            {isSelectable && (
-                              <input
-                                type="checkbox"
-                                checked={selectedJobIds.includes(job.id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) setSelectedJobIds([...selectedJobIds, job.id]);
-                                  else setSelectedJobIds(selectedJobIds.filter(id => id !== job.id));
-                                }}
-                                className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
-                              />
-                            )}
+                          <td className="p-3.5 pl-4">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) setSelectedAgentIds([...selectedAgentIds, ag.deviceId]);
+                                else setSelectedAgentIds(selectedAgentIds.filter((id) => id !== ag.deviceId));
+                              }}
+                              className="rounded border-surface-border bg-surface text-brand-500 focus:ring-0"
+                            />
                           </td>
                         )}
-                        <td className="p-4 font-mono text-xs text-white uppercase">
-                          {job.job_type.replace(/_/g, ' ')}
+                        <td className="p-3.5">
+                          <div className="font-semibold text-white">{ag.deviceName}</div>
+                          <div className="text-[11px] text-slate-500 font-mono">{ag.host}</div>
                         </td>
-                        <td className="p-4 text-slate-300">
-                          {job.device_name || 'Unknown'}
-                        </td>
-                        <td className="p-4">
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            job.status === 'succeeded'
-                              ? 'bg-emerald-500/10 text-emerald-400'
-                              : job.status === 'waiting_for_device'
-                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                              : job.status === 'queued'
-                              ? 'bg-blue-500/10 text-blue-400'
-                              : job.status === 'running' || job.status === 'downloading'
-                              ? 'bg-purple-500/10 text-purple-400 animate-pulse'
-                              : job.status === 'failed' || job.status === 'timed_out'
-                              ? 'bg-red-500/10 text-red-400'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}>
-                            {job.status === 'waiting_for_device' && <span className="mr-1">⏳</span>}
-                            {job.status.replace(/_/g, ' ')}
+                        <td className="p-3.5 text-slate-400 capitalize">{ag.platform}</td>
+                        <td className="p-3.5">
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-brand-500/10 text-brand-300 border border-brand-500/20">
+                            v{ag.agentVersion}
                           </span>
                         </td>
-                        <td className="p-4 text-xs text-slate-400">
-                          {new Date(job.created_at).toLocaleTimeString()}
+                        <td className="p-3.5">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                              ag.status === 'online' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-surface text-slate-400'
+                            }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                                ag.status === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                              }`}
+                            />
+                            {ag.status}
+                          </span>
                         </td>
-                        <td className="p-4 text-xs text-slate-400">
-                          {job.created_by_username}
+                        <td className="p-3.5 text-slate-400">
+                          {ag.lastSeenAt ? new Date(ag.lastSeenAt).toLocaleTimeString() : 'Never'}
                         </td>
-                        <td className="p-4 text-right space-x-2">
-                          {(job.stdout || job.stderr) && (
+                        {isAdmin && (
+                          <td className="p-3.5 pr-4 text-right space-x-1.5">
                             <button
-                              onClick={() => setSelectedJobLogs(job)}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition"
+                              onClick={() => handleRescanDevice(ag.deviceId)}
+                              className="px-2.5 py-1 rounded-lg bg-surface hover:bg-surface-hover text-slate-300 border border-surface-border text-xs transition"
+                              title="Rescan software inventory"
                             >
-                              Logs
+                              Rescan
                             </button>
-                          )}
-                          {isAdmin && ['queued', 'waiting_for_device'].includes(job.status) && (
                             <button
-                              onClick={() => handleCancelJob(job.id)}
-                              className="px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-medium transition"
+                              onClick={() => handleSingleAgentUpdate(ag.deviceId)}
+                              className="px-2.5 py-1 rounded-lg bg-brand-500/20 hover:bg-brand-500/30 text-brand-300 border border-brand-500/30 text-xs font-medium transition"
                             >
-                              Cancel
+                              Push Update
                             </button>
-                          )}
-                        </td>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* =========================================================================
-          TAB 6: AUDIT LOG
-          ========================================================================= */}
-      {activeTab === 'audit' && (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-800/50">
-          {auditLogs.map((log) => (
-            <div key={log.id} className="p-4 text-sm hover:bg-slate-800/20 transition">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="font-semibold text-slate-200">{log.username}</span>
-                <span>{new Date(log.created_at).toLocaleString()}</span>
+        {/* =========================================================================
+            TAB 5: JOBS QUEUE
+            ========================================================================= */}
+        {activeTab === 'jobs' && (
+          <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-2 rounded-2xl bg-surface border border-surface-border">
+              <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto">
+                {['all', 'waiting_for_device', 'queued', 'running', 'succeeded', 'failed'].map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => setJobStatusFilter(st)}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium capitalize transition-colors ${
+                      jobStatusFilter === st
+                        ? 'bg-brand-500/20 text-brand-300 border border-brand-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                    }`}
+                  >
+                    {st.replace(/_/g, ' ')}
+                  </button>
+                ))}
               </div>
-              <div className="mt-1 font-mono text-xs text-cyan-400 font-medium">
-                {log.action}
-              </div>
-              {log.details_json && (
-                <pre className="mt-2 p-3 bg-slate-950/80 rounded-xl text-xs font-mono text-slate-400 overflow-x-auto max-h-40 border border-slate-800/50">
-                  {JSON.stringify(JSON.parse(log.details_json), null, 2)}
-                </pre>
+
+              {isAdmin && selectedJobIds.length > 0 && (
+                <button
+                  onClick={handleBulkCancelJobs}
+                  className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl text-xs font-semibold transition"
+                >
+                  Cancel Selected ({selectedJobIds.length})
+                </button>
               )}
             </div>
-          ))}
-        </div>
-      )}
+
+            <div className="bg-surface-card border border-surface-border rounded-2xl overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-surface-border text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-surface-active/50">
+                    {isAdmin && (
+                      <th className="p-3.5 pl-4 w-10">
+                        <input
+                          type="checkbox"
+                          checked={
+                            selectedJobIds.length ===
+                              jobs.filter((j) => ['queued', 'waiting_for_device'].includes(j.status)).length &&
+                            selectedJobIds.length > 0
+                          }
+                          onChange={(e) => {
+                            if (e.target.checked)
+                              setSelectedJobIds(
+                                jobs.filter((j) => ['queued', 'waiting_for_device'].includes(j.status)).map((j) => j.id)
+                              );
+                            else setSelectedJobIds([]);
+                          }}
+                          className="rounded border-surface-border bg-surface text-brand-500 focus:ring-0"
+                        />
+                      </th>
+                    )}
+                    <th className="p-3.5">Type</th>
+                    <th className="p-3.5">Device</th>
+                    <th className="p-3.5">Status</th>
+                    <th className="p-3.5">Created</th>
+                    <th className="p-3.5">By</th>
+                    <th className="p-3.5 pr-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-border/50 text-xs">
+                  {jobs
+                    .filter((j) => jobStatusFilter === 'all' || j.status === jobStatusFilter)
+                    .map((job) => {
+                      const isSelectable = ['queued', 'waiting_for_device'].includes(job.status);
+                      return (
+                        <tr key={job.id} className="hover:bg-surface-hover/60 transition">
+                          {isAdmin && (
+                            <td className="p-3.5 pl-4">
+                              {isSelectable && (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedJobIds.includes(job.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) setSelectedJobIds([...selectedJobIds, job.id]);
+                                    else setSelectedJobIds(selectedJobIds.filter((id) => id !== job.id));
+                                  }}
+                                  className="rounded border-surface-border bg-surface text-brand-500 focus:ring-0"
+                                />
+                              )}
+                            </td>
+                          )}
+                          <td className="p-3.5 font-mono text-xs text-white uppercase font-medium">
+                            {job.job_type.replace(/_/g, ' ')}
+                          </td>
+                          <td className="p-3.5 text-slate-300">{job.device_name || 'Unknown'}</td>
+                          <td className="p-3.5">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                                job.status === 'succeeded'
+                                  ? 'bg-emerald-500/10 text-emerald-400'
+                                  : job.status === 'waiting_for_device'
+                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                                  : job.status === 'queued'
+                                  ? 'bg-blue-500/10 text-blue-400'
+                                  : job.status === 'running' || job.status === 'downloading'
+                                  ? 'bg-purple-500/10 text-purple-400 animate-pulse'
+                                  : job.status === 'failed' || job.status === 'timed_out'
+                                  ? 'bg-red-500/10 text-red-400'
+                                  : 'bg-surface text-slate-400'
+                              }`}
+                            >
+                              {job.status === 'waiting_for_device' && (
+                                <SymbolIcon name="clock.fill" className="w-3 h-3 mr-1 text-amber-400" />
+                              )}
+                              {job.status.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="p-3.5 text-slate-400">{new Date(job.created_at).toLocaleTimeString()}</td>
+                          <td className="p-3.5 text-slate-400">{job.created_by_username}</td>
+                          <td className="p-3.5 pr-4 text-right space-x-1.5">
+                            {(job.stdout || job.stderr) && (
+                              <button
+                                onClick={() => setSelectedJobLogs(job)}
+                                className="px-2.5 py-1 rounded-lg bg-surface hover:bg-surface-hover text-slate-300 border border-surface-border text-xs transition"
+                              >
+                                Logs
+                              </button>
+                            )}
+                            {isAdmin && ['queued', 'waiting_for_device'].includes(job.status) && (
+                              <button
+                                onClick={() => handleCancelJob(job.id)}
+                                className="px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs transition"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 6: AUDIT LOG
+            ========================================================================= */}
+        {activeTab === 'audit' && (
+          <div className="bg-surface-card border border-surface-border rounded-2xl overflow-hidden divide-y divide-surface-border/50">
+            {auditLogs.map((log) => (
+              <div key={log.id} className="p-3.5 text-xs hover:bg-surface-hover/30 transition">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="font-semibold text-white">{log.username}</span>
+                  <span className="font-mono text-[11px]">{new Date(log.created_at).toLocaleString()}</span>
+                </div>
+                <div className="mt-1 font-mono text-xs text-brand-300 font-semibold">{log.action}</div>
+                {log.details_json && (
+                  <pre className="mt-2 p-2.5 bg-surface/80 rounded-xl text-[11px] font-mono text-slate-300 overflow-x-auto max-h-40 border border-surface-border">
+                    {JSON.stringify(JSON.parse(log.details_json), null, 2)}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
 
       {/* =========================================================================
           MODAL: RUN SCRIPT
           ========================================================================= */}
       {runningScript && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+          <div className="bg-surface-card border border-surface-border rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
               <div>
-                <h3 className="text-lg font-bold text-white flex items-center space-x-2">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <span>Run: {runningScript.name}</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono uppercase">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-300 border border-brand-500/20 font-mono uppercase">
                     {runningScript.script_type}
                   </span>
                 </h3>
-                <p className="text-xs text-slate-400 mt-1">Executes under SYSTEM / root with parameters injected as environment variables.</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Executes under SYSTEM / root with parameters injected as environment variables.
+                </p>
               </div>
-              <button onClick={() => setRunningScript(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
+              <button onClick={() => setRunningScript(null)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
             </div>
 
-            <div className="mt-4 space-y-4">
+            <div className="space-y-4">
               {/* Target Devices Selection */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Target Devices ({targetDeviceIds.length} selected)</label>
-                <div className="max-h-48 overflow-y-auto border border-slate-800 rounded-xl p-3 bg-slate-950/50 space-y-2">
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
+                  Target Devices ({targetDeviceIds.length} selected)
+                </label>
+                <div className="max-h-48 overflow-y-auto border border-surface-border rounded-xl p-2 bg-surface/50 space-y-1">
                   {agents.map((ag) => {
                     const isCompatible = runningScript.target_os === 'all' || ag.os === runningScript.target_os;
                     return (
-                      <label key={ag.deviceId} className={`flex items-center space-x-3 p-2 rounded-lg cursor-pointer ${isCompatible ? 'hover:bg-slate-800/40' : 'opacity-40 cursor-not-allowed'}`}>
+                      <label
+                        key={ag.deviceId}
+                        className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer ${
+                          isCompatible ? 'hover:bg-surface-hover' : 'opacity-40 cursor-not-allowed'
+                        }`}
+                      >
                         <input
                           type="checkbox"
                           disabled={!isCompatible}
                           checked={targetDeviceIds.includes(ag.deviceId)}
                           onChange={(e) => {
                             if (e.target.checked) setTargetDeviceIds([...targetDeviceIds, ag.deviceId]);
-                            else setTargetDeviceIds(targetDeviceIds.filter(id => id !== ag.deviceId));
+                            else setTargetDeviceIds(targetDeviceIds.filter((id) => id !== ag.deviceId));
                           }}
-                          className="rounded border-slate-700 bg-slate-800 text-cyan-500 focus:ring-0"
+                          className="rounded border-surface-border bg-surface text-brand-500 focus:ring-0"
                         />
-                        <div className="flex-1 text-sm">
-                          <span className="font-medium text-white">{ag.deviceName}</span>
-                          <span className="text-xs text-slate-500 ml-2">({ag.os}/{ag.arch})</span>
+                        <div className="flex-1 text-xs">
+                          <span className="font-semibold text-white">{ag.deviceName}</span>
+                          <span className="text-slate-500 ml-1.5 font-mono">
+                            ({ag.os}/{ag.arch})
+                          </span>
                         </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${ag.status === 'online' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full ${
+                            ag.status === 'online' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-surface text-slate-500'
+                          }`}
+                        >
                           {ag.status}
                         </span>
                       </label>
@@ -1062,10 +1214,12 @@ export const Updates: React.FC = () => {
               {/* Dynamic Parameter Inputs */}
               {runningScript.parameters_schema_json && (
                 <div className="space-y-3">
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">Script Parameters</label>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                    Script Parameters
+                  </label>
                   {(JSON.parse(runningScript.parameters_schema_json) as ScriptParameterDef[]).map((p) => (
                     <div key={p.name}>
-                      <label className="block text-xs text-slate-400 mb-1">
+                      <label className="block text-xs text-slate-300 mb-1">
                         {p.label || p.name} {p.required && <span className="text-red-400">*</span>}
                         {p.description && <span className="text-slate-500 text-[11px] block">{p.description}</span>}
                       </label>
@@ -1074,7 +1228,7 @@ export const Updates: React.FC = () => {
                         value={runtimeParams[p.name] || ''}
                         onChange={(e) => setRuntimeParams({ ...runtimeParams, [p.name]: e.target.value })}
                         placeholder={p.defaultValue || ''}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                        className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                       />
                     </div>
                   ))}
@@ -1083,11 +1237,13 @@ export const Updates: React.FC = () => {
 
               {/* Offline Expiry Option */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1">Job Expiry if Device is Offline</label>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Job Expiry if Device is Offline
+                </label>
                 <select
                   value={scriptExpiryOption}
                   onChange={(e) => setScriptExpiryOption(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 >
                   <option value="none">No Expiry (Runs when device next comes online)</option>
                   <option value="1h">Expire after 1 hour</option>
@@ -1097,16 +1253,16 @@ export const Updates: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-6 pt-4 border-t border-slate-800 flex justify-end space-x-3">
+            <div className="pt-3 border-t border-surface-border flex justify-end gap-2">
               <button
                 onClick={() => setRunningScript(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition"
+                className="px-3.5 py-1.5 bg-surface hover:bg-surface-hover text-slate-300 border border-surface-border rounded-xl text-xs font-medium transition"
               >
                 Cancel
               </button>
               <button
                 onClick={handleExecuteScript}
-                className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-medium shadow-lg shadow-cyan-600/20 transition"
+                className="px-4 py-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold shadow-sm transition"
               >
                 Execute Script
               </button>
@@ -1120,31 +1276,36 @@ export const Updates: React.FC = () => {
           ========================================================================= */}
       {isScriptModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <form onSubmit={handleSaveScript} className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white">{editingScript ? 'Edit Script' : 'Create New Script'}</h3>
-              <button type="button" onClick={() => setIsScriptModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+          <form
+            onSubmit={handleSaveScript}
+            className="bg-surface-card border border-surface-border rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
+              <h3 className="text-base font-bold text-white">{editingScript ? 'Edit Script' : 'Create New Script'}</h3>
+              <button type="button" onClick={() => setIsScriptModalOpen(false)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Script Name *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Script Name *</label>
                 <input
                   type="text"
                   required
                   value={scriptForm.name}
                   onChange={(e) => setScriptForm({ ...scriptForm, name: e.target.value })}
                   placeholder="e.g. Defender Onboarding"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Target OS</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Target OS</label>
                 <select
                   value={scriptForm.target_os}
                   onChange={(e) => setScriptForm({ ...scriptForm, target_os: e.target.value as any })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 >
                   <option value="all">All Operating Systems</option>
                   <option value="windows">Windows</option>
@@ -1153,13 +1314,13 @@ export const Updates: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Script Type *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Script Type *</label>
                 <select
                   value={scriptForm.script_type}
                   onChange={(e) => setScriptForm({ ...scriptForm, script_type: e.target.value as any })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 >
                   <option value="powershell">PowerShell (.ps1)</option>
                   <option value="batch">Windows Command (.cmd / .bat)</option>
@@ -1168,63 +1329,63 @@ export const Updates: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Timeout (Seconds)</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Timeout (Seconds)</label>
                 <input
                   type="number"
                   min="10"
                   max="7200"
                   value={scriptForm.timeout_seconds}
                   onChange={(e) => setScriptForm({ ...scriptForm, timeout_seconds: parseInt(e.target.value) || 600 })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Description</label>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Description</label>
               <input
                 type="text"
                 value={scriptForm.description}
                 onChange={(e) => setScriptForm({ ...scriptForm, description: e.target.value })}
                 placeholder="Optional description of what this script accomplishes..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Script Code Content *</label>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Script Code Content *</label>
               <textarea
                 required
-                rows={10}
+                rows={8}
                 value={scriptForm.script_content}
                 onChange={(e) => setScriptForm({ ...scriptForm, script_content: e.target.value })}
                 placeholder="# Paste script content here..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs font-mono text-emerald-400 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-surface border border-surface-border rounded-xl p-3 text-xs font-mono text-emerald-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Version Notes</label>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Version Notes</label>
               <input
                 type="text"
                 value={scriptForm.notes}
                 onChange={(e) => setScriptForm({ ...scriptForm, notes: e.target.value })}
                 placeholder="e.g. Added error handling"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
             </div>
 
-            <div className="pt-3 border-t border-slate-800 flex justify-end space-x-3">
+            <div className="pt-3 border-t border-surface-border flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsScriptModalOpen(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition"
+                className="px-3.5 py-1.5 bg-surface hover:bg-surface-hover text-slate-300 border border-surface-border rounded-xl text-xs font-medium transition"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-medium shadow-lg shadow-cyan-600/20 transition"
+                className="px-4 py-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold shadow-sm transition"
               >
                 Save Script
               </button>
@@ -1238,31 +1399,36 @@ export const Updates: React.FC = () => {
           ========================================================================= */}
       {isUploadAgentModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <form onSubmit={handleUploadAgentBuild} className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white">Upload New Agent Build</h3>
-              <button type="button" onClick={() => setIsUploadAgentModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+          <form
+            onSubmit={handleUploadAgentBuild}
+            className="bg-surface-card border border-surface-border rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
+              <h3 className="text-base font-bold text-white">Upload New Agent Build</h3>
+              <button type="button" onClick={() => setIsUploadAgentModalOpen(false)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Version String *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Version String *</label>
                 <input
                   type="text"
                   required
                   value={agentUploadForm.version}
                   onChange={(e) => setAgentUploadForm({ ...agentUploadForm, version: e.target.value })}
                   placeholder="1.1.1"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Target OS *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Target OS *</label>
                 <select
                   value={agentUploadForm.target_os}
                   onChange={(e) => setAgentUploadForm({ ...agentUploadForm, target_os: e.target.value as any })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 >
                   <option value="windows">Windows</option>
                   <option value="linux">Linux</option>
@@ -1270,13 +1436,13 @@ export const Updates: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Target Architecture *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Target Architecture *</label>
                 <select
                   value={agentUploadForm.target_arch}
                   onChange={(e) => setAgentUploadForm({ ...agentUploadForm, target_arch: e.target.value as any })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                 >
                   <option value="amd64">AMD64 (x86_64)</option>
                   <option value="arm64">ARM64 (aarch64)</option>
@@ -1284,38 +1450,38 @@ export const Updates: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Binary Executable *</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Binary Executable *</label>
                 <input
                   type="file"
                   required
                   onChange={(e) => setAgentUploadFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs text-slate-400 file:mr-2 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-medium file:bg-slate-800 file:text-cyan-400 hover:file:bg-slate-700"
+                  className="w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-surface file:text-brand-300 hover:file:bg-surface-hover"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Release Notes</label>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Release Notes</label>
               <input
                 type="text"
                 value={agentUploadForm.notes}
                 onChange={(e) => setAgentUploadForm({ ...agentUploadForm, notes: e.target.value })}
                 placeholder="e.g. Added rollback watchdog"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-surface border border-surface-border rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
             </div>
 
-            <div className="pt-3 border-t border-slate-800 flex justify-end space-x-3">
+            <div className="pt-3 border-t border-surface-border flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsUploadAgentModalOpen(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition"
+                className="px-3.5 py-1.5 bg-surface hover:bg-surface-hover text-slate-300 border border-surface-border rounded-xl text-xs font-medium transition"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-medium shadow-lg shadow-cyan-600/20 transition"
+                className="px-4 py-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold shadow-sm transition"
               >
                 Upload Build
               </button>
@@ -1329,52 +1495,56 @@ export const Updates: React.FC = () => {
           ========================================================================= */}
       {isBuildsDrawerOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="bg-surface-card border border-surface-border rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
               <div>
-                <h3 className="text-lg font-bold text-white">Registered Agent Builds</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Uploaded binaries are isolated from install scripts until promoted to default.</p>
+                <h3 className="text-base font-bold text-white">Registered Agent Builds</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Uploaded binaries are isolated from install scripts until explicitly promoted to default.
+                </p>
               </div>
-              <button onClick={() => setIsBuildsDrawerOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setIsBuildsDrawerOpen(false)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
             </div>
 
             {agentBuilds.length === 0 ? (
-              <div className="p-8 text-center text-slate-500 text-sm">
-                No custom agent builds uploaded yet. The server serves default binaries from its built repository.
+              <div className="p-8 text-center text-slate-400 text-xs">
+                No custom agent builds uploaded yet. The server serves default precompiled binaries.
               </div>
             ) : (
-              <div className="divide-y divide-slate-800/60">
+              <div className="divide-y divide-surface-border/60">
                 {agentBuilds.map((b) => (
-                  <div key={b.id} className="py-3.5 flex items-center justify-between text-sm">
+                  <div key={b.id} className="py-3 flex items-center justify-between text-xs">
                     <div>
-                      <div className="font-semibold text-white flex items-center space-x-2">
+                      <div className="font-semibold text-white flex items-center gap-2">
                         <span>v{b.version}</span>
-                        <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 uppercase font-mono">
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-surface text-slate-400 uppercase font-mono">
                           {b.target_os}/{b.target_arch}
                         </span>
                         {b.is_install_default === 1 && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold">
                             ★ Install Default
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-500 font-mono mt-1">
+                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
                         SHA-256: {b.file_sha256.substring(0, 16)}... • {(b.file_size_bytes / (1024 * 1024)).toFixed(2)} MB
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center gap-2">
                       {b.is_install_default !== 1 && (
                         <button
                           onClick={() => handleSetDefaultBuild(b.id)}
-                          className="px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30 rounded-lg text-xs font-medium transition"
+                          className="px-2.5 py-1 bg-brand-500/20 hover:bg-brand-500/30 text-brand-300 border border-brand-500/30 rounded-lg text-xs font-medium transition"
                         >
                           Promote to Default
                         </button>
                       )}
                       <button
                         onClick={() => handleDeleteBuild(b.id)}
-                        className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-xs font-medium transition"
+                        className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg text-xs font-medium transition"
                       >
                         Delete
                       </button>
@@ -1392,27 +1562,35 @@ export const Updates: React.FC = () => {
           ========================================================================= */}
       {selectedJobLogs && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="bg-surface-card border border-surface-border rounded-2xl max-w-4xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-surface-border pb-3">
               <div>
-                <h3 className="text-lg font-bold text-white font-mono flex items-center space-x-2">
+                <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
                   <span>Job: {selectedJobLogs.job_type}</span>
-                  <span className={`text-xs px-2.5 py-0.5 rounded-full uppercase ${
-                    selectedJobLogs.status === 'succeeded' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                  }`}>
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full uppercase ${
+                      selectedJobLogs.status === 'succeeded' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                    }`}
+                  >
                     {selectedJobLogs.status}
                   </span>
                 </h3>
-                <p className="text-xs text-slate-400 mt-1">Device: {selectedJobLogs.device_name || selectedJobLogs.device_id}</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Device: {selectedJobLogs.device_name || selectedJobLogs.device_id}
+                </p>
               </div>
-              <button onClick={() => setSelectedJobLogs(null)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setSelectedJobLogs(null)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-3 font-mono text-xs">
               {selectedJobLogs.stdout && (
                 <div>
-                  <div className="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1">Standard Output</div>
-                  <pre className="p-4 rounded-xl bg-slate-950 text-slate-300 overflow-x-auto whitespace-pre-wrap border border-slate-800">
+                  <div className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider mb-1">
+                    Standard Output
+                  </div>
+                  <pre className="p-3.5 rounded-xl bg-surface text-slate-300 overflow-x-auto whitespace-pre-wrap border border-surface-border">
                     {selectedJobLogs.stdout}
                   </pre>
                 </div>
@@ -1420,18 +1598,20 @@ export const Updates: React.FC = () => {
 
               {selectedJobLogs.stderr && (
                 <div>
-                  <div className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-1">Standard Error</div>
-                  <pre className="p-4 rounded-xl bg-slate-950 text-red-300 overflow-x-auto whitespace-pre-wrap border border-red-950">
+                  <div className="text-[11px] font-semibold text-red-400 uppercase tracking-wider mb-1">
+                    Standard Error
+                  </div>
+                  <pre className="p-3.5 rounded-xl bg-surface text-red-300 overflow-x-auto whitespace-pre-wrap border border-red-950">
                     {selectedJobLogs.stderr}
                   </pre>
                 </div>
               )}
             </div>
 
-            <div className="pt-3 border-t border-slate-800 flex justify-end">
+            <div className="pt-3 border-t border-surface-border flex justify-end">
               <button
                 onClick={() => setSelectedJobLogs(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition"
+                className="px-4 py-1.5 bg-surface hover:bg-surface-hover text-slate-300 border border-surface-border rounded-xl text-xs font-semibold transition"
               >
                 Close
               </button>
@@ -1442,4 +1622,5 @@ export const Updates: React.FC = () => {
     </div>
   );
 };
+
 export default Updates;
