@@ -28,6 +28,15 @@ type HubReportResponse struct {
 	NextJob *collector.JobPayload `json:"next_job,omitempty"`
 }
 
+// Version can be embedded at compile time via -ldflags "-X main.Version=..."
+var Version = ""
+
+func init() {
+	if Version != "" {
+		collector.AgentVersion = Version
+	}
+}
+
 var (
 	watchdogTimer *time.Timer
 	watchdogOnce  sync.Once
@@ -35,6 +44,12 @@ var (
 )
 
 func main() {
+	// Support quick version check before full flag parsing
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-version" || os.Args[1] == "-v") {
+		fmt.Printf("Shoreline Connect Monitoring Agent v%s (%s/%s)\n", collector.AgentVersion, runtime.GOOS, runtime.GOARCH)
+		return
+	}
+
 	hubURL := flag.String("hub", "", "Shoreline Connect Hub URL (e.g. http://100.99.99.176:3001)")
 	token := flag.String("token", "", "Device Monitoring Bearer Token")
 	interval := flag.Int("interval", 15, "Metrics collection interval in seconds (default 15)")
@@ -42,6 +57,7 @@ func main() {
 	installFlag := flag.Bool("install", false, "Install agent as a background system service")
 	uninstallFlag := flag.Bool("uninstall", false, "Uninstall agent background system service")
 	versionFlag := flag.Bool("version", false, "Print agent version")
+	vFlag := flag.Bool("v", false, "Print agent version (shorthand)")
 
 	flag.Parse()
 
@@ -59,7 +75,7 @@ func main() {
 		return
 	}
 
-	if *versionFlag {
+	if *versionFlag || *vFlag {
 		fmt.Printf("Shoreline Connect Monitoring Agent v%s (%s/%s)\n", collector.AgentVersion, runtime.GOOS, runtime.GOARCH)
 		return
 	}
