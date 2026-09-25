@@ -350,7 +350,158 @@ export function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_cloud_folder_meta ON cloud_folder_metadata(user_id, folder_path);
+
+    /* --- Build 4: Updates & Software Management Subsystem --- */
+    CREATE TABLE IF NOT EXISTS software_inventory (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      software_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      version TEXT,
+      publisher TEXT,
+      install_date TEXT,
+      arch TEXT,
+      source TEXT NOT NULL,
+      uninstall_string TEXT,
+      quiet_uninstall_string TEXT,
+      msi_product_code TEXT,
+      is_per_user INTEGER DEFAULT 0,
+      is_remotely_uninstallable INTEGER DEFAULT 1,
+      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+      UNIQUE(device_id, software_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sw_inv_device ON software_inventory(device_id);
+    CREATE INDEX IF NOT EXISTS idx_sw_inv_name ON software_inventory(name);
+
+    CREATE TABLE IF NOT EXISTS software_inventory_history (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      software_key TEXT NOT NULL,
+      change_type TEXT NOT NULL CHECK (change_type IN ('added', 'removed', 'modified')),
+      name TEXT NOT NULL,
+      old_version TEXT,
+      new_version TEXT,
+      changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sw_hist_device ON software_inventory_history(device_id, changed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS device_available_updates (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      current_version TEXT,
+      available_version TEXT NOT NULL,
+      source TEXT NOT NULL,
+      is_security INTEGER DEFAULT 0,
+      requires_reboot INTEGER DEFAULT 0,
+      detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dev_avail_updates ON device_available_updates(device_id);
+
+    CREATE TABLE IF NOT EXISTS update_pins (
+      id TEXT PRIMARY KEY,
+      device_id TEXT,
+      app_name TEXT NOT NULL,
+      pin_type TEXT NOT NULL CHECK (pin_type IN ('ignore', 'pin_version')),
+      pinned_version TEXT,
+      reason TEXT,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_update_pins_app ON update_pins(app_name);
+
+    CREATE TABLE IF NOT EXISTS update_packages (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      description TEXT,
+      package_source_type TEXT NOT NULL CHECK (package_source_type IN ('file', 'winget', 'apt')),
+      winget_id TEXT,
+      apt_package_name TEXT,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS update_package_versions (
+      id TEXT PRIMARY KEY,
+      package_id TEXT NOT NULL,
+      version TEXT NOT NULL,
+      target_os TEXT NOT NULL CHECK (target_os IN ('windows', 'linux', 'all')),
+      target_arch TEXT NOT NULL CHECK (target_arch IN ('amd64', 'arm64', 'all')),
+      file_path TEXT,
+      file_sha256 TEXT,
+      file_size_bytes INTEGER DEFAULT 0,
+      silent_install_args TEXT,
+      uninstall_command TEXT,
+      expected_exit_codes TEXT DEFAULT '0,3010,1641',
+      detection_name TEXT,
+      detection_version TEXT,
+      notes TEXT,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (package_id) REFERENCES update_packages(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE(package_id, version, target_os, target_arch)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pkg_ver_pkg ON update_package_versions(package_id);
+
+    CREATE TABLE IF NOT EXISTS update_jobs (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      job_type TEXT NOT NULL CHECK (job_type IN ('inventory_scan', 'check_updates', 'install', 'uninstall', 'upgrade', 'agent_update', 'run_script')),
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+      payload_json TEXT NOT NULL,
+      exit_code INTEGER,
+      stdout TEXT,
+      stderr TEXT,
+      reboot_required INTEGER DEFAULT 0,
+      detection_matched INTEGER,
+      timeout_seconds INTEGER DEFAULT 1800,
+      expires_at DATETIME NOT NULL,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME,
+      completed_at DATETIME,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_update_jobs_dev_status ON update_jobs(device_id, status);
+    CREATE INDEX IF NOT EXISTS idx_update_jobs_created ON update_jobs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS update_audit_logs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      username TEXT NOT NULL,
+      action TEXT NOT NULL,
+      device_id TEXT,
+      device_name TEXT,
+      package_id TEXT,
+      details_json TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_update_audit_time ON update_audit_logs(created_at DESC);
   `);
+
+  try {
+    db.exec('ALTER TABLE monitoring_agents ADD COLUMN agent_version TEXT;');
+  } catch {}
 
   // Initialize default settings if not exists
   const insertSetting = db.prepare('INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)');
@@ -363,6 +514,7 @@ export function initDatabase() {
   insertSetting.run('tab_group_monitoring', process.env.TAB_GROUP_MONITORING || '');
   insertSetting.run('tab_group_tracking', process.env.TAB_GROUP_TRACKING || '');
   insertSetting.run('tab_group_cloud', process.env.TAB_GROUP_CLOUD || '');
+  insertSetting.run('tab_group_updates', process.env.TAB_GROUP_UPDATES || '');
   insertSetting.run('git_repo_url', config.git.repoUrl);
   insertSetting.run('git_branch', config.git.branch);
   insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');

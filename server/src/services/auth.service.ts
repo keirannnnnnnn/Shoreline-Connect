@@ -101,7 +101,7 @@ export class AuthService {
       adminGroups.some(ag => this.checkGroupMatch(g, ag))
     );
 
-    const tabKeys = ['devices', 'monitoring', 'tracking', 'cloud'];
+    const tabKeys = ['devices', 'monitoring', 'tracking', 'cloud', 'updates'];
     const tabs: Record<string, TabPermission> = {};
 
     for (const tab of tabKeys) {

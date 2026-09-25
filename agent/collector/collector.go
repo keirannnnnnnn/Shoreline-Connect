@@ -4,11 +4,13 @@ import (
 	"time"
 )
 
-const AgentVersion = "1.0.0"
+const AgentVersion = "1.1.0"
 
 type Collector interface {
 	GetSystemInfo() (*SystemInfo, error)
 	Collect() (*MetricPayload, error)
+	GetSoftwareInventory() ([]SoftwareItem, bool, error)
+	GetAvailableUpdates() ([]AvailableUpdateItem, error)
 }
 
 type BaseCollector struct {

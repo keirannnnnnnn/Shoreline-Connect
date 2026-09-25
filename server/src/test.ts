@@ -11,9 +11,22 @@ import path from 'path';
 import { MonitoringService } from './services/monitoring.service.js';
 import { TrackingService } from './services/tracking.service.js';
 import { CloudService } from './services/cloud.service.js';
+import { UpdatesService } from './services/updates.service.js';
 
 async function runTests() {
   console.log('🧪 Starting Shoreline Connect Automated Backend Tests...\n');
+
+  initDatabase();
+  // Clean any previous test artifacts
+  db.prepare("DELETE FROM users WHERE id LIKE 'test-%'").run();
+  db.prepare("DELETE FROM devices WHERE id LIKE '%test%'").run();
+  db.prepare("DELETE FROM folders WHERE id LIKE '%test%'").run();
+  db.prepare("DELETE FROM tracked_items WHERE id LIKE 'test-%'").run();
+  db.prepare("DELETE FROM cloud_shares WHERE id LIKE 'test-%' OR token LIKE 'test-%'").run();
+  db.prepare("DELETE FROM cloud_quick_link_audit WHERE id LIKE 'test-%'").run();
+  db.prepare("DELETE FROM update_jobs WHERE device_id LIKE '%test%'").run();
+  db.prepare("DELETE FROM software_inventory WHERE device_id LIKE '%test%'").run();
+  db.prepare("DELETE FROM software_inventory_history WHERE device_id LIKE '%test%'").run();
 
   // 1. Test Crypto Service
   console.log('▶ Test 1: AES-256-GCM Credential Encryption & Decryption');
@@ -566,6 +579,117 @@ async function runTests() {
 
   console.log('  ✅ Cloud personal drive, folder ops, zero-memory streams, sharing, audit & isolation verified.\n');
 
+  // 15. Test Updates & Software Management Subsystem
+  console.log('▶ Test 15: Updates & Software Management Subsystem');
+
+  // Setup test device
+  const testUpdateDevId = 'test-updates-dev-1';
+  db.prepare("INSERT OR REPLACE INTO devices (id, name, protocol, host, port, encrypted_credentials, owner_id) VALUES (?, ?, 'rdp', '10.0.0.99', 3389, ?, ?)").run(
+    testUpdateDevId,
+    'DC01-Test',
+    JSON.stringify(CryptoService.encrypt({ username: 'Administrator' })),
+    adminId
+  );
+
+  // 15a: Tab Permission Enforcement
+  db.prepare("UPDATE system_settings SET value = 'Shoreline Connect Updates Users' WHERE key = 'tab_group_updates'").run();
+  const permsWithUpdates = AuthService.getUserPermissions(adminId);
+  assert(permsWithUpdates.tabs.updates, 'Updates tab permissions must be resolved');
+  assert.strictEqual(permsWithUpdates.tabs.updates.canAccess, true, 'Admin must have access to updates tab');
+
+  // 15b: Software Inventory Ingestion & Diff History Tracking
+  const initialScan = [
+    {
+      softwareKey: '{23170F69-40C1-2702-2408-000001000000}',
+      name: '7-Zip 24.08 (x64)',
+      version: '24.08.00.0',
+      publisher: 'Igor Pavlov',
+      source: 'msi',
+      arch: 'amd64',
+      msiProductCode: '{23170F69-40C1-2702-2408-000001000000}',
+      quietUninstallString: 'MsiExec.exe /X{23170F69-40C1-2702-2408-000001000000} /qn',
+    },
+    {
+      softwareKey: 'Google Chrome',
+      name: 'Google Chrome',
+      version: '128.0.6613.85',
+      publisher: 'Google LLC',
+      source: 'exe',
+      arch: 'amd64',
+      quietUninstallString: '"C:\\Program Files\\Google\\Chrome\\Application\\128.0.6613.85\\Installer\\setup.exe" --uninstall --system-level --force-uninstall',
+    },
+  ];
+
+  const sync1 = UpdatesService.syncInventory(testUpdateDevId, initialScan);
+  assert.strictEqual(sync1.added, 2, 'Initial inventory scan must add 2 items');
+
+  const invList1 = UpdatesService.getDeviceInventory(testUpdateDevId, adminId);
+  assert.strictEqual(invList1.items.length, 2, 'Device must have 2 software items');
+  assert.strictEqual(invList1.history.length, 2, 'History must record 2 added items');
+
+  // 15c: Version Modification Diff (Upgrade 7-Zip to 24.09, remove Chrome, add VSCode)
+  const modifiedScan = [
+    {
+      softwareKey: '{23170F69-40C1-2702-2408-000001000000}',
+      name: '7-Zip 24.09 (x64)',
+      version: '24.09.00.0',
+      publisher: 'Igor Pavlov',
+      source: 'msi',
+      arch: 'amd64',
+    },
+    {
+      softwareKey: 'Microsoft.VisualStudioCode',
+      name: 'Microsoft Visual Studio Code',
+      version: '1.93.0',
+      publisher: 'Microsoft Corporation',
+      source: 'exe',
+      arch: 'amd64',
+    },
+  ];
+
+  const sync2 = UpdatesService.syncInventory(testUpdateDevId, modifiedScan);
+  assert.strictEqual(sync2.modified, 1, '7-Zip version change must be detected as modified');
+  assert.strictEqual(sync2.removed, 1, 'Chrome disappearance must be detected as removed');
+  assert.strictEqual(sync2.added, 1, 'VSCode appearance must be detected as added');
+
+  const invList2 = UpdatesService.getDeviceInventory(testUpdateDevId, adminId);
+  assert.strictEqual(invList2.items.length, 2, 'Device must have 2 software items after sync');
+  const modHist = invList2.history.find((h) => h.change_type === 'modified');
+  assert(modHist, 'History must contain modified entry');
+  assert.strictEqual(modHist.old_version, '24.08.00.0', 'Old version must be preserved in history');
+  assert.strictEqual(modHist.new_version, '24.09.00.0', 'New version must be recorded in history');
+
+  // 15d: Job Queue & Command Channel
+  const scanJobId = UpdatesService.queueJob(testUpdateDevId, 'inventory_scan', {}, adminId, 'keiran.griffiths');
+  assert(scanJobId, 'Job ID must be generated');
+
+  const nextJob = UpdatesService.getNextPendingJob(testUpdateDevId);
+  assert(nextJob, 'Agent must receive next pending job on check-in');
+  assert.strictEqual(nextJob.id, scanJobId, 'Dispatched job ID must match');
+  assert.strictEqual(nextJob.status, 'sent', 'Job status must transition to sent');
+
+  // While job is in flight, getNextPendingJob must return null (1 concurrent job limit per device)
+  const blockedJob = UpdatesService.getNextPendingJob(testUpdateDevId);
+  assert.strictEqual(blockedJob, null, 'No new job can be dispatched while a job is in flight');
+
+  // Agent reports status
+  UpdatesService.reportJobStatus(scanJobId, testUpdateDevId, 'succeeded', 0, 'Scan completed: 2 packages found', '', false);
+  const jobsAfterReport = UpdatesService.getJobs(adminId);
+  const completedJob = jobsAfterReport.find((j) => j.id === scanJobId);
+  assert(completedJob, 'Job must exist in jobs list');
+  assert.strictEqual(completedJob.status, 'succeeded', 'Job must be marked succeeded');
+  assert.strictEqual(completedJob.exit_code, 0, 'Exit code must be 0');
+
+  // 15e: Overview & Audit Trail
+  const overview = UpdatesService.getOverview(adminId);
+  assert(overview.totalTrackedSoftware >= 2, 'Overview must aggregate total tracked software');
+
+  const updateAuditEntries = UpdatesService.getAuditLogs(adminId);
+  const queueAudit = updateAuditEntries.find((a: any) => a.action === 'queue_job_inventory_scan');
+  assert(queueAudit, 'Audit log must record job creation');
+
+  console.log('  ✅ Updates inventory discovery, version diffing, job queue & command channel verified.\n');
+
   // Cleanup test mutations from DB so live system remains untouched
   db.prepare("DELETE FROM users WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM devices WHERE id LIKE '%test%'").run();
@@ -573,7 +697,10 @@ async function runTests() {
   db.prepare("DELETE FROM tracked_items WHERE user_id = ? OR id = ?").run(userId, testVehicle.id);
   db.prepare("DELETE FROM cloud_shares WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM cloud_quick_link_audit WHERE id LIKE 'test-%'").run();
-  db.prepare("UPDATE system_settings SET value = '' WHERE key IN ('tab_group_devices', 'tab_group_monitoring', 'tab_group_tracking', 'tab_group_cloud')").run();
+  db.prepare("DELETE FROM update_jobs WHERE device_id LIKE '%test%'").run();
+  db.prepare("DELETE FROM software_inventory WHERE device_id LIKE '%test%'").run();
+  db.prepare("DELETE FROM software_inventory_history WHERE device_id LIKE '%test%'").run();
+  db.prepare("UPDATE system_settings SET value = '' WHERE key IN ('tab_group_devices', 'tab_group_monitoring', 'tab_group_tracking', 'tab_group_cloud', 'tab_group_updates')").run();
   db.prepare("UPDATE system_settings SET value = 'Shoreline-Admins' WHERE key = 'ad_admin_group'").run();
   if (fs.existsSync(testProjectsDir)) {
     fs.rmSync(testProjectsDir, { recursive: true, force: true });

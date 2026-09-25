@@ -103,6 +103,20 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch }) => {
                 <span>Cloud</span>
               </Link>
             )}
+
+            {(!user?.permissions || user.permissions.tabs?.updates?.canAccess) && (
+              <Link
+                to="/updates"
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                  location.pathname.startsWith('/updates')
+                    ? 'bg-surface-active text-white border border-surface-borderLight'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-surface-hover'
+                }`}
+              >
+                <SymbolIcon name="arrow.clockwise" className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Updates</span>
+              </Link>
+            )}
           </nav>
         </div>
 

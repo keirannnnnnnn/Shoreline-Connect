@@ -45,5 +45,46 @@
                             └──────────────┘             └──────────────┘             └──────────────┘
 ```
 
+
 ---
 
+## 📦 Updates & Software Management Subsystem (Build 4)
+
+Shoreline Connect features a native software management subsystem powered by the lightweight Go monitoring agent:
+
+- **Strict Software-Only Scope**: Windows OS Updates, KBs, feature updates, and drivers are strictly excluded. Focus is solely on software inventory (WinGet, MSI, EXE, Deb, Snap, Flatpak) and custom execution.
+- **Bi-Directional Command Channel**: The agent sends health metrics every 15s (`POST /api/monitoring/report`). The backend piggybacks pending jobs (`{ next_job }`) directly in the HTTP 200 response, eliminating the need for open inbound ports, WinRM, SSH, or remoting.
+- **Access Control & RBAC**:
+  - Gated by Active Directory group: `Shoreline Connect Updates Users` (configurable in **Settings** &rarr; `tab_group_updates`).
+  - Standard users can explore software inventory, view pending/active jobs, and review history.
+  - Install, uninstall, upgrade, script execution, and agent self-update actions strictly require membership in `Shoreline Connect Administrators`.
+- **Zero-Dependency Go Agent (v1.1.0)**:
+  - Supports Windows Registry discovery (`Uninstall` + `WOW6432Node` + user hives) with silent uninstaller extraction and MSI GUID detection.
+  - Supports Linux package discovery (`dpkg`, `snap`, `flatpak`).
+  - Integrated with WinGet (`--scope machine --source winget`).
+  - Includes a background job worker and self-update engine with automated rollback watchdog.
+
+### 🌐 Nginx Proxy Manager (NPM) Configuration
+For package uploads (e.g. large `.exe`, `.msi`, `.deb` installers up to 500MB), add the following directive to the **Advanced** tab of your Shoreline Connect proxy host in Nginx Proxy Manager:
+
+```nginx
+client_max_body_size 500M;
+```
+
+### 🔄 Agent Upgrade / Reinstallation (v1.1.0)
+To enable software discovery and the command channel across your fleet, update the agent on each device once:
+
+#### Windows (PowerShell as Administrator)
+```powershell
+Stop-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
+# Download or copy new agent binary to C:\Program Files\ShorelineAgent\shoreline-agent.exe
+Start-Service -Name "ShorelineAgent"
+```
+
+#### Linux (systemd)
+```bash
+sudo systemctl stop shoreline-agent
+# Download or copy new agent binary to /usr/local/bin/shoreline-agent
+sudo systemctl start shoreline-agent
+```
+*(Subsequent agent updates can be triggered directly from the Shoreline Connect UI using the built-in self-update feature).*

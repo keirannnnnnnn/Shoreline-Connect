@@ -291,3 +291,78 @@ export interface CloudStorageUsage {
   folderCount: number;
 }
 
+/* --- Build 4: Updates & Software Management Types --- */
+export interface SoftwareItem {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  version?: string;
+  arch?: string;
+  source: string;
+  installDate?: string;
+  isPerUser?: boolean;
+  isRemotelyUninstallable?: boolean;
+  quietUninstallString?: string;
+  uninstallString?: string;
+  msiProductCode?: string;
+}
+
+export interface SoftwareGroup {
+  name: string;
+  publisher: string | null;
+  installs: SoftwareItem[];
+}
+
+export interface SoftwareInventoryHistoryItem {
+  id: string;
+  device_id: string;
+  software_key: string;
+  change_type: 'added' | 'removed' | 'modified';
+  name: string;
+  old_version?: string | null;
+  new_version?: string | null;
+  changed_at: string;
+}
+
+export interface UpdatesOverview {
+  devicesWithUpdates: number;
+  failedJobsLast7Days: number;
+  devicesPendingReboot: number;
+  detectionUnavailable: number;
+  agentsOutOfDate: number;
+  totalTrackedSoftware: number;
+}
+
+export interface UpdateJob {
+  id: string;
+  device_id: string;
+  device_name?: string;
+  job_type: 'inventory_scan' | 'check_updates' | 'install' | 'uninstall' | 'upgrade' | 'agent_update' | 'run_script';
+  status: 'queued' | 'sent' | 'downloading' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+  payload_json: string;
+  exit_code?: number | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  reboot_required?: number;
+  detection_matched?: number | null;
+  timeout_seconds: number;
+  expires_at: string;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface UpdateAuditLog {
+  id: string;
+  user_id?: string | null;
+  username: string;
+  action: string;
+  device_id?: string | null;
+  device_name?: string | null;
+  package_id?: string | null;
+  details_json?: string | null;
+  created_at: string;
+}
+

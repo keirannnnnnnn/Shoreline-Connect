@@ -32,6 +32,7 @@ export const Settings: React.FC = () => {
     tab_group_monitoring: '',
     tab_group_tracking: '',
     tab_group_cloud: '',
+    tab_group_updates: '',
     git_repo_url: '',
     git_branch: 'main',
     monitoring_hub_url: '',
@@ -1067,6 +1068,20 @@ export const Settings: React.FC = () => {
                             type="text"
                             value={adSettings.tab_group_cloud || ''}
                             onChange={(e) => setAdSettings({ ...adSettings, tab_group_cloud: e.target.value })}
+                            placeholder="Leave blank for all users"
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
+                            <SymbolIcon name="arrow.clockwise" className="w-3.5 h-3.5 text-purple-400" />
+                            <span>Updates Tab AD Group</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={adSettings.tab_group_updates || ''}
+                            onChange={(e) => setAdSettings({ ...adSettings, tab_group_updates: e.target.value })}
                             placeholder="Leave blank for all users"
                             className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-brand-500 focus:outline-none"
                           />

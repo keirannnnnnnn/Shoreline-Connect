@@ -17,7 +17,13 @@ import (
 	"time"
 
 	"shoreline-agent/collector"
+	"shoreline-agent/jobs"
 )
+
+type HubReportResponse struct {
+	Status  string                `json:"status"`
+	NextJob *collector.JobPayload `json:"next_job,omitempty"`
+}
 
 func main() {
 	hubURL := flag.String("hub", "", "Shoreline Connect Hub URL (e.g. http://100.99.99.176:3001)")
@@ -114,41 +120,75 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 	}
 
 	col := collector.NewCollector()
+	jobRunner := jobs.NewJobRunner(hubURL, token, insecureTLS, col)
 
 	// Initial system info
 	sysInfo, err := col.GetSystemInfo()
 	if err != nil {
 		log.Printf("Warning: Failed to gather initial system info: %v", err)
 	} else {
-		log.Printf("Host: %s | OS: %s %s | CPU: %s (%d cores)", sysInfo.Hostname, sysInfo.OS, sysInfo.PlatformVer, sysInfo.CPUModel, sysInfo.CPUCores)
+		log.Printf("Host: %s | OS: %s %s | CPU: %s (%d cores) | Agent: v%s", sysInfo.Hostname, sysInfo.OS, sysInfo.PlatformVer, sysInfo.CPUModel, sysInfo.CPUCores, collector.AgentVersion)
 	}
 
 	reportURL := fmt.Sprintf("%s/api/monitoring/report", hubURL)
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// Periodic Timers:
+	// - Metric ticker (15s)
+	// - Inventory scan (every 6 hours + initial on startup)
+	// - Update check (every 24 hours)
+	metricsTicker := time.NewTicker(interval)
+	defer metricsTicker.Stop()
 
-	// Send initial baseline payload immediately
-	sendPayload(client, reportURL, token, col, sysInfo)
+	inventoryTicker := time.NewTicker(6 * time.Hour)
+	defer inventoryTicker.Stop()
+
+	updatesTicker := time.NewTicker(24 * time.Hour)
+	defer updatesTicker.Stop()
+
+	// Initial background discovery scans (non-blocking)
+	go func() {
+		time.Sleep(3 * time.Second) // allow initial metrics handshake first
+		jobRunner.ExecuteJob(collector.JobPayload{
+			ID:          "startup_inventory",
+			JobType:     "inventory_scan",
+			PayloadJSON: "{}",
+		})
+	}()
+
+	// Send initial metrics payload immediately
+	sendPayload(client, reportURL, token, col, sysInfo, jobRunner)
 
 	for {
 		select {
 		case <-stopChan:
 			return
-		case <-ticker.C:
-			sendPayload(client, reportURL, token, col, sysInfo)
+		case <-metricsTicker.C:
+			sendPayload(client, reportURL, token, col, sysInfo, jobRunner)
+		case <-inventoryTicker.C:
+			jobRunner.ExecuteJob(collector.JobPayload{
+				ID:          fmt.Sprintf("periodic_inv_%d", time.Now().Unix()),
+				JobType:     "inventory_scan",
+				PayloadJSON: "{}",
+			})
+		case <-updatesTicker.C:
+			jobRunner.ExecuteJob(collector.JobPayload{
+				ID:          fmt.Sprintf("periodic_upd_%d", time.Now().Unix()),
+				JobType:     "check_updates",
+				PayloadJSON: "{}",
+			})
 		}
 	}
 }
 
-func sendPayload(client *http.Client, reportURL, token string, col collector.Collector, sysInfo *collector.SystemInfo) {
+func sendPayload(client *http.Client, reportURL, token string, col collector.Collector, sysInfo *collector.SystemInfo, jobRunner *jobs.JobRunner) {
 	metrics, err := col.Collect()
 	if err != nil {
 		log.Printf("Error collecting metrics: %v", err)
 		return
 	}
 
-	// Attach full system info on each payload
+	// Attach full system info and agent version on each payload
+	metrics.AgentVersion = collector.AgentVersion
 	metrics.SystemInfo = sysInfo
 
 	data, err := json.Marshal(metrics)
@@ -177,5 +217,15 @@ func sendPayload(client *http.Client, reportURL, token string, col collector.Col
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("Hub rejected metrics payload (HTTP %d): %s", resp.StatusCode, string(body))
+		return
+	}
+
+	// Read response body to check for piggybacked jobs
+	var reportResp HubReportResponse
+	if err := json.NewDecoder(resp.Body).Decode(&reportResp); err == nil {
+		if reportResp.NextJob != nil && reportResp.NextJob.ID != "" {
+			log.Printf("[CommandChannel] Received dispatched job %s (%s)", reportResp.NextJob.ID, reportResp.NextJob.JobType)
+			jobRunner.ExecuteJob(*reportResp.NextJob)
+		}
 	}
 }

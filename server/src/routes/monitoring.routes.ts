@@ -24,8 +24,8 @@ monitoringRouter.post('/report', (req: Request, res: Response) => {
   }
 
   try {
-    MonitoringService.recordMetrics(authResult.deviceId, req.body);
-    return res.status(200).json({ status: 'ok' });
+    const result = MonitoringService.recordMetrics(authResult.deviceId, req.body);
+    return res.status(200).json({ status: 'ok', next_job: result.next_job });
   } catch (err: any) {
     console.error('[Monitoring Ingest Error]:', err.message);
     return res.status(500).json({ error: 'Failed to record metrics' });

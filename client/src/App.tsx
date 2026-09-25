@@ -11,13 +11,14 @@ import { Monitoring } from './pages/Monitoring.js';
 import { MonitoringDetail } from './pages/MonitoringDetail.js';
 import { Tracking } from './pages/Tracking.js';
 import { Cloud } from './pages/Cloud.js';
+import { Updates } from './pages/Updates.js';
 import { PublicCloudShare } from './pages/PublicCloudShare.js';
 import { AccessDenied } from './components/AccessDenied.js';
 import { SymbolIcon } from './components/SymbolIcon.js';
 
 const ProtectedRoute: React.FC<{
   children: React.ReactNode;
-  requiredTab?: 'devices' | 'monitoring' | 'tracking' | 'cloud';
+  requiredTab?: 'devices' | 'monitoring' | 'tracking' | 'cloud' | 'updates';
 }> = ({ children, requiredTab }) => {
   const { user, loading } = useAuth();
 
@@ -96,7 +97,7 @@ export const App: React.FC = () => {
             }
           />
 
-          {/* 5. Cloud Storage Vault Scaffold */}
+          {/* 5. Cloud Storage Vault */}
           <Route
             path="/cloud"
             element={
@@ -106,7 +107,17 @@ export const App: React.FC = () => {
             }
           />
 
-          {/* 6. Remote Sessions */}
+          {/* 6. Updates & Software Management */}
+          <Route
+            path="/updates"
+            element={
+              <ProtectedRoute requiredTab="updates">
+                <Updates />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 7. Remote Sessions */}
           <Route
             path="/session/:id"
             element={

@@ -21,15 +21,26 @@ import { dashboardRouter } from './routes/dashboard.routes.js';
 import { trackingRouter } from './routes/tracking.routes.js';
 import { cloudRouter } from './routes/cloud.routes.js';
 import { backupRouter } from './routes/backup.routes.js';
+import { updatesRouter } from './routes/updates.routes.js';
 import { MonitoringService } from './services/monitoring.service.js';
 import { TrackingService } from './services/tracking.service.js';
 import { CloudService } from './services/cloud.service.js';
+import { UpdatesService } from './services/updates.service.js';
 
 // 1. Initialize SQLite Database & Background Jobs
 initDatabase();
 MonitoringService.startBackgroundJob();
 TrackingService.startBackgroundJob();
 CloudService.startBackgroundJob();
+
+// Updates Watchdog (every 60s for job expiration and timeouts)
+setInterval(() => {
+  try {
+    UpdatesService.runWatchdogJobCleanup();
+  } catch (err) {
+    console.error('[Updates Watchdog Error]:', err);
+  }
+}, 60000);
 
 // 2. Setup Express application
 const app = express();
@@ -52,6 +63,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/tracking', trackingRouter);
 app.use('/api/cloud', cloudRouter);
 app.use('/api/backup', backupRouter);
+app.use('/api/updates', updatesRouter);
 
 // Direct static route for Symbols
 app.use('/symbols', express.static(config.symbolsDir, {

@@ -5,6 +5,7 @@ import { config } from '../config/env.js';
 import { db } from '../db/database.js';
 import { CryptoService } from './crypto.service.js';
 import { DeviceService } from './device.service.js';
+import { UpdatesService } from './updates.service.js';
 
 export interface MonitoringAgentRecord {
   id: string;
@@ -15,12 +16,14 @@ export interface MonitoringAgentRecord {
   status: 'pending' | 'online' | 'offline';
   last_seen_at: string | null;
   system_info: string | null;
+  agent_version?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface IngestMetricPayload {
   timestamp: number;
+  agent_version?: string;
   cpu_usage: number;
   cpu_per_core?: number[];
   ram_used: number;
@@ -361,20 +364,26 @@ export class MonitoringService {
       payload.disks ? JSON.stringify(payload.disks) : null
     );
 
-    // 2. Update agent status to online and record system info
+    // 2. Update agent status to online and record system info & agent version
+    const agentVersion = payload.agent_version || (payload.system_info as any)?.agent_version || null;
+
     if (payload.system_info) {
       db.prepare(`
         UPDATE monitoring_agents
-        SET status = 'online', last_seen_at = ?, system_info = ?, updated_at = ?
+        SET status = 'online', last_seen_at = ?, system_info = ?, agent_version = COALESCE(?, agent_version), updated_at = ?
         WHERE device_id = ?
-      `).run(nowIso, JSON.stringify(payload.system_info), nowIso, deviceId);
+      `).run(nowIso, JSON.stringify(payload.system_info), agentVersion, nowIso, deviceId);
     } else {
       db.prepare(`
         UPDATE monitoring_agents
-        SET status = 'online', last_seen_at = ?, updated_at = ?
+        SET status = 'online', last_seen_at = ?, agent_version = COALESCE(?, agent_version), updated_at = ?
         WHERE device_id = ?
-      `).run(nowIso, nowIso, deviceId);
+      `).run(nowIso, agentVersion, nowIso, deviceId);
     }
+
+    // 3. Check for any pending update / inventory / scan jobs for this device
+    const nextJob = UpdatesService.getNextPendingJob(deviceId);
+    return { next_job: nextJob };
   }
 
   /**

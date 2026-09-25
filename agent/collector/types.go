@@ -33,6 +33,7 @@ type SystemInfo struct {
 
 type MetricPayload struct {
 	Timestamp      int64              `json:"timestamp"`
+	AgentVersion   string             `json:"agent_version,omitempty"`
 	CPUUsage       float64            `json:"cpu_usage"`
 	CPUPerCore     []float64          `json:"cpu_per_core,omitempty"`
 	RAMUsed        uint64             `json:"ram_used"`
@@ -52,4 +53,37 @@ type MetricPayload struct {
 	Uptime         uint64             `json:"uptime"`
 	Disks          []DiskInfo         `json:"disks"`
 	SystemInfo     *SystemInfo        `json:"system_info,omitempty"`
+}
+
+type SoftwareItem struct {
+	SoftwareKey             string `json:"softwareKey"`
+	Name                    string `json:"name"`
+	Version                 string `json:"version,omitempty"`
+	Publisher               string `json:"publisher,omitempty"`
+	InstallDate             string `json:"installDate,omitempty"`
+	Arch                    string `json:"arch,omitempty"`
+	Source                  string `json:"source"`
+	UninstallString         string `json:"uninstallString,omitempty"`
+	QuietUninstallString    string `json:"quietUninstallString,omitempty"`
+	MSIProductCode          string `json:"msiProductCode,omitempty"`
+	IsPerUser               bool   `json:"isPerUser,omitempty"`
+	IsRemotelyUninstallable bool   `json:"isRemotelyUninstallable"`
+}
+
+type AvailableUpdateItem struct {
+	Name             string `json:"name"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	AvailableVersion string `json:"available_version"`
+	Source           string `json:"source"`
+	IsSecurity       bool   `json:"is_security,omitempty"`
+	RequiresReboot   bool   `json:"requires_reboot,omitempty"`
+}
+
+type JobPayload struct {
+	ID             string `json:"id"`
+	DeviceID       string `json:"device_id"`
+	JobType        string `json:"job_type"`
+	Status         string `json:"status"`
+	PayloadJSON    string `json:"payload_json"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }

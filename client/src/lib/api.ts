@@ -1,4 +1,4 @@
-import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage } from '../types/index.js';
+import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage, UpdatesOverview, SoftwareGroup, SoftwareInventoryHistoryItem, UpdateJob, UpdateAuditLog } from '../types/index.js';
 
 const API_BASE = '/api';
 
@@ -396,6 +396,32 @@ export const api = {
       fetchJson<{ success: boolean; message: string; summary: any }>('/backup/import', {
         method: 'POST',
         body: JSON.stringify(backupData),
+      }),
+  },
+
+  updates: {
+    getOverview: () =>
+      fetchJson<UpdatesOverview>('/updates/overview'),
+    getFleetInventory: (search?: string) =>
+      fetchJson<{ inventory: SoftwareGroup[] }>(`/updates/inventory${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+    getDeviceInventory: (deviceId: string) =>
+      fetchJson<{ items: any[]; history: SoftwareInventoryHistoryItem[]; deviceName: string }>(`/updates/inventory/device/${deviceId}`),
+    rescanDevice: (deviceId: string) =>
+      fetchJson<{ success: boolean; jobId: string }>(`/updates/inventory/rescan/${deviceId}`, {
+        method: 'POST',
+      }),
+    getJobs: (limit: number = 100) =>
+      fetchJson<{ jobs: UpdateJob[] }>(`/updates/jobs?limit=${limit}`),
+    cancelJob: (jobId: string) =>
+      fetchJson<{ success: boolean }>(`/updates/jobs/${jobId}/cancel`, {
+        method: 'POST',
+      }),
+    getAuditLogs: (limit: number = 200) =>
+      fetchJson<{ logs: UpdateAuditLog[] }>(`/updates/audit?limit=${limit}`),
+    selfUpdateAgent: (deviceId: string, targetVersion?: string) =>
+      fetchJson<{ success: boolean; jobId: string }>(`/updates/agent/self-update/${deviceId}`, {
+        method: 'POST',
+        body: JSON.stringify({ targetVersion }),
       }),
   },
 };
