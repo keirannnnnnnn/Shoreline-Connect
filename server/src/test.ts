@@ -728,7 +728,7 @@ async function runTests() {
   assert.strictEqual(scriptV2.id, script1.id, 'Must update same script');
 
   // Retrieve script with versions
-  const fullScript = UpdatesService.getScriptById(script1.id, adminId);
+  const fullScript = UpdatesService.getScriptById(script1.id);
   assert(fullScript, 'Must retrieve script by ID');
   assert.strictEqual(fullScript.versions.length, 2, 'Script must have 2 versions in history');
 
@@ -768,7 +768,7 @@ async function runTests() {
 
   // Promote to install default
   UpdatesService.setInstallDefaultAgentBuild(build1.id, adminId, 'keiran.griffiths');
-  const buildsList = UpdatesService.getAgentBuilds(adminId);
+  const buildsList = UpdatesService.getAgentBuilds();
   const promotedBuild = buildsList.find(b => b.id === build1.id);
   assert(promotedBuild && promotedBuild.is_install_default === 1, 'Build must be promoted to install default');
 
@@ -787,7 +787,7 @@ async function runTests() {
   assert.strictEqual(offlineJob.status, 'waiting_for_device', 'Offline device job must be queued with status waiting_for_device');
 
   // Cancel bulk jobs
-  const cancelResult = UpdatesService.cancelJobsBulk([offlineJobId, deployResult.jobIds[0]], adminId, 'keiran.griffiths');
+  const cancelResult = UpdatesService.cancelJobsBulk([offlineJobId, deployResult.jobIds[0]], adminId, 'keiran.griffiths', true);
   assert.strictEqual(cancelResult.cancelledCount, 2, 'Must cancel 2 jobs');
   const cancelledJobCheck = UpdatesService.getJobs(adminId).find(j => j.id === offlineJobId);
   assert.strictEqual(cancelledJobCheck?.status, 'cancelled', 'Job status must be cancelled');
