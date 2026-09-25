@@ -5,8 +5,8 @@ import (
 )
 
 // AgentVersion is embedded at compile time via -ldflags "-X main.Version=..." or "-X shoreline-agent/collector.AgentVersion=..."
-// Fallback default is 1.1.1
-var AgentVersion = "1.1.1"
+// Fallback default is 1.2.0
+var AgentVersion = "1.2.0"
 
 type Collector interface {
 	GetSystemInfo() (*SystemInfo, error)

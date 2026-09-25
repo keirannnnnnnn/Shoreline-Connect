@@ -190,6 +190,15 @@ func (r *JobRunner) runJob(job collector.JobPayload) {
 	case "run_script":
 		r.handleRunScript(job)
 
+	case "install":
+		r.handleInstall(job)
+
+	case "uninstall":
+		r.handleUninstall(job)
+
+	case "upgrade":
+		r.handleUpgrade(job)
+
 	default:
 		ec := 1
 		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Unknown or unsupported job type: %s", job.JobType), false, nil)
@@ -474,4 +483,430 @@ fi`, markerPath, bakPath, bakPath, exePath)
 			_ = exec.Command("systemd-run", "--unit=shoreline-agent-supervisor-"+fmt.Sprint(time.Now().Unix()), "--no-block", "bash", "-c", supervisorCmd).Start()
 		}
 	}()
+}
+
+// Helper: parse comma-separated expected exit codes into a set
+func parseExpectedExitCodes(expectedStr string) map[int]bool {
+	set := make(map[int]bool)
+	if strings.TrimSpace(expectedStr) == "" {
+		set[0] = true
+		set[3010] = true
+		set[1641] = true
+		return set
+	}
+	parts := strings.Split(expectedStr, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		var code int
+		if _, err := fmt.Sscanf(p, "%d", &code); err == nil {
+			set[code] = true
+		}
+	}
+	if len(set) == 0 {
+		set[0] = true
+	}
+	return set
+}
+
+// Helper: wait for dpkg/apt lock up to maxWait duration
+func waitForDpkgLock(maxWait time.Duration) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		// Check if lock files exist and are held by any process
+		cmd := exec.Command("fuser", "/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock", "/var/lib/apt/lists/lock")
+		out, _ := cmd.CombinedOutput()
+		if len(strings.TrimSpace(string(out))) == 0 {
+			return
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// Handle Software Package Installation
+func (r *JobRunner) handleInstall(job collector.JobPayload) {
+	log.Printf("[JobRunner] Executing install job %s", job.ID)
+	r.ReportStatus(job.ID, "downloading", nil, "Preparing installer...", "", false, nil)
+
+	var payload struct {
+		PackageID         string `json:"package_id"`
+		VersionID         string `json:"version_id"`
+		PackageName       string `json:"package_name"`
+		Version           string `json:"version"`
+		SourceType        string `json:"source_type"` // 'file', 'winget', 'apt'
+		WingetID          string `json:"winget_id"`
+		AptPackageName    string `json:"apt_package_name"`
+		DownloadPath      string `json:"download_path"`
+		FileSHA256        string `json:"file_sha256"`
+		FileSizeBytes     int64  `json:"file_size_bytes"`
+		SilentInstallArgs string `json:"silent_install_args"`
+		ExpectedExitCodes string `json:"expected_exit_codes"`
+		DetectionName     string `json:"detection_name"`
+		DetectionVersion  string `json:"detection_version"`
+	}
+
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to parse install payload: %v", err), false, nil)
+		return
+	}
+
+	expectedCodes := parseExpectedExitCodes(payload.ExpectedExitCodes)
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var exitCode int
+	var stdoutBuf, stderrBuf bytes.Buffer
+
+	if payload.SourceType == "winget" {
+		targetId := payload.WingetID
+		if targetId == "" {
+			targetId = payload.PackageName
+		}
+		r.ReportStatus(job.ID, "running", nil, fmt.Sprintf("Installing %s via WinGet...", targetId), "", false, nil)
+
+		args := []string{"install", "--id", targetId, "--exact", "--scope", "machine", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"}
+		if payload.SilentInstallArgs != "" {
+			args = append(args, strings.Fields(payload.SilentInstallArgs)...)
+		}
+
+		cmd := exec.CommandContext(ctx, "winget.exe", args...)
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		runErr := cmd.Run()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+
+	} else if payload.SourceType == "apt" {
+		targetPkg := payload.AptPackageName
+		if targetPkg == "" {
+			targetPkg = payload.PackageName
+		}
+		r.ReportStatus(job.ID, "running", nil, fmt.Sprintf("Waiting for package lock & installing %s via apt...", targetPkg), "", false, nil)
+		waitForDpkgLock(5 * time.Minute)
+
+		cmd := exec.CommandContext(ctx, "apt-get", "install", "-y", "-o", "Dpkg::Options::=--force-confold", targetPkg)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		runErr := cmd.Run()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+
+	} else {
+		// File upload installer (.msi, .exe, .deb, .msix)
+		if payload.DownloadPath == "" {
+			ec := 1
+			r.ReportStatus(job.ID, "failed", &ec, "", "Missing download path for file package", false, nil)
+			return
+		}
+
+		downloadURL := fmt.Sprintf("%s%s", r.hubURL, payload.DownloadPath)
+		req, err := http.NewRequest("GET", downloadURL, nil)
+		if err != nil {
+			ec := 1
+			r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to create download request: %v", err), false, nil)
+			return
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", r.token))
+
+		resp, err := r.client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			ec := 1
+			r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to download package installer (HTTP %d)", resp.StatusCode), false, nil)
+			return
+		}
+		defer resp.Body.Close()
+
+		tempDir := os.TempDir()
+		ext := ".tmp"
+		if strings.Contains(payload.DownloadPath, ".msi") {
+			ext = ".msi"
+		} else if strings.Contains(payload.DownloadPath, ".exe") {
+			ext = ".exe"
+		} else if strings.Contains(payload.DownloadPath, ".deb") {
+			ext = ".deb"
+		} else if strings.Contains(payload.DownloadPath, ".msix") {
+			ext = ".msix"
+		}
+
+		tempInstaller := filepath.Join(tempDir, fmt.Sprintf("sh_inst_%s%s", job.ID, ext))
+		outFile, err := os.OpenFile(tempInstaller, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		if err != nil {
+			ec := 1
+			r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to create local installer file: %v", err), false, nil)
+			return
+		}
+
+		hasher := sha256.New()
+		writer := io.MultiWriter(outFile, hasher)
+		if _, err := io.Copy(writer, resp.Body); err != nil {
+			outFile.Close()
+			os.Remove(tempInstaller)
+			ec := 1
+			r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to save installer file: %v", err), false, nil)
+			return
+		}
+		outFile.Close()
+		defer os.Remove(tempInstaller)
+
+		calcHash := hex.EncodeToString(hasher.Sum(nil))
+		if payload.FileSHA256 != "" && !strings.EqualFold(calcHash, payload.FileSHA256) {
+			ec := 1
+			r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("SHA-256 checksum mismatch: expected %s, got %s", payload.FileSHA256, calcHash), false, nil)
+			return
+		}
+
+		r.ReportStatus(job.ID, "running", nil, fmt.Sprintf("Executing installer for %s...", payload.PackageName), "", false, nil)
+
+		var cmd *exec.Cmd
+		if strings.HasSuffix(strings.ToLower(tempInstaller), ".msi") {
+			args := []string{"/i", tempInstaller}
+			if payload.SilentInstallArgs != "" {
+				args = append(args, strings.Fields(payload.SilentInstallArgs)...)
+			} else {
+				args = append(args, "/qn", "/norestart")
+			}
+			cmd = exec.CommandContext(ctx, "msiexec.exe", args...)
+		} else if strings.HasSuffix(strings.ToLower(tempInstaller), ".deb") {
+			waitForDpkgLock(5 * time.Minute)
+			cmd = exec.CommandContext(ctx, "apt-get", "install", "-y", "-o", "Dpkg::Options::=--force-confold", "./"+filepath.Base(tempInstaller))
+			cmd.Dir = filepath.Dir(tempInstaller)
+			cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		} else if strings.HasSuffix(strings.ToLower(tempInstaller), ".msix") || strings.HasSuffix(strings.ToLower(tempInstaller), ".appx") {
+			cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", fmt.Sprintf("Add-AppxPackage -Path '%s'", tempInstaller))
+		} else {
+			// Executable installer (.exe or binary)
+			args := strings.Fields(payload.SilentInstallArgs)
+			cmd = exec.CommandContext(ctx, tempInstaller, args...)
+		}
+
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		runErr := cmd.Run()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+	}
+
+	stdoutStr := stdoutBuf.String()
+	stderrStr := stderrBuf.String()
+	isExpected := expectedCodes[exitCode]
+	rebootReq := exitCode == 3010 || exitCode == 1641
+
+	// Rescan software inventory immediately to verify detection rule
+	scannedItems, sysReboot, invErr := r.col.GetSoftwareInventory()
+	if invErr == nil {
+		_ = r.SubmitInventory(scannedItems, sysReboot || rebootReq)
+	}
+	if sysReboot {
+		rebootReq = true
+	}
+
+	matchTarget := strings.ToLower(payload.DetectionName)
+	if matchTarget == "" {
+		matchTarget = strings.ToLower(payload.PackageName)
+	}
+	verTarget := strings.TrimSpace(payload.DetectionVersion)
+
+	detected := false
+	for _, itm := range scannedItems {
+		if strings.Contains(strings.ToLower(itm.Name), matchTarget) || strings.Contains(strings.ToLower(itm.SoftwareKey), matchTarget) {
+			if verTarget == "" || strings.EqualFold(itm.Version, verTarget) {
+				detected = true
+				break
+			}
+		}
+	}
+
+	if !isExpected {
+		matched := false
+		r.ReportStatus(job.ID, "failed", &exitCode, stdoutStr, fmt.Sprintf("Installer exited with unexpected code %d.\n%s", exitCode, stderrStr), rebootReq, &matched)
+		return
+	}
+
+	if !detected {
+		matched := false
+		r.ReportStatus(job.ID, "succeeded_not_detected", &exitCode, stdoutStr, fmt.Sprintf("Installer succeeded with expected exit code %d, but application was not detected in software inventory.\n%s", exitCode, stderrStr), rebootReq, &matched)
+		return
+	}
+
+	matched := true
+	r.ReportStatus(job.ID, "succeeded", &exitCode, stdoutStr, stderrStr, rebootReq, &matched)
+}
+
+// Handle Remote Uninstall
+func (r *JobRunner) handleUninstall(job collector.JobPayload) {
+	log.Printf("[JobRunner] Executing uninstall job %s", job.ID)
+	r.ReportStatus(job.ID, "running", nil, "Executing uninstall command...", "", false, nil)
+
+	var payload struct {
+		InventoryID      string `json:"inventory_id"`
+		SoftwareKey      string `json:"software_key"`
+		Name             string `json:"name"`
+		Version          string `json:"version"`
+		Source           string `json:"source"`
+		UninstallCommand string `json:"uninstall_command"`
+	}
+
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to parse uninstall payload: %v", err), false, nil)
+		return
+	}
+
+	if payload.UninstallCommand == "" {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", "No uninstall command specified", false, nil)
+		return
+	}
+
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 20 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if runtime.GOOS == "linux" {
+		waitForDpkgLock(5 * time.Minute)
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd.exe", "/c", payload.UninstallCommand)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/bash", "-c", payload.UninstallCommand)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	runErr := cmd.Run()
+
+	var exitCode int
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	stdoutStr := stdoutBuf.String()
+	stderrStr := stderrBuf.String()
+	rebootReq := exitCode == 3010 || exitCode == 1641
+
+	// Rescan inventory and submit update
+	scannedItems, sysReboot, invErr := r.col.GetSoftwareInventory()
+	if invErr == nil {
+		_ = r.SubmitInventory(scannedItems, sysReboot || rebootReq)
+	}
+
+	if exitCode == 0 || exitCode == 3010 || exitCode == 1641 {
+		r.ReportStatus(job.ID, "succeeded", &exitCode, stdoutStr, stderrStr, rebootReq || sysReboot, nil)
+	} else {
+		r.ReportStatus(job.ID, "failed", &exitCode, stdoutStr, stderrStr, rebootReq || sysReboot, nil)
+	}
+}
+
+// Handle Available App Upgrade
+func (r *JobRunner) handleUpgrade(job collector.JobPayload) {
+	log.Printf("[JobRunner] Executing upgrade job %s", job.ID)
+	r.ReportStatus(job.ID, "running", nil, "Executing upgrade...", "", false, nil)
+
+	var payload struct {
+		UpdateID          string `json:"update_id"`
+		Name              string `json:"name"`
+		CurrentVersion    string `json:"current_version"`
+		AvailableVersion  string `json:"available_version"`
+		PackageIdentifier string `json:"package_identifier"`
+		Source            string `json:"source"`
+	}
+
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to parse upgrade payload: %v", err), false, nil)
+		return
+	}
+
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if payload.Source == "winget" || runtime.GOOS == "windows" {
+		targetId := payload.PackageIdentifier
+		if targetId == "" {
+			targetId = payload.Name
+		}
+		cmd = exec.CommandContext(ctx, "winget.exe", "upgrade", "--id", targetId, "--exact", "--scope", "machine", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity")
+	} else if payload.Source == "apt" || runtime.GOOS == "linux" {
+		targetPkg := payload.PackageIdentifier
+		if targetPkg == "" {
+			targetPkg = payload.Name
+		}
+		waitForDpkgLock(5 * time.Minute)
+		cmd = exec.CommandContext(ctx, "apt-get", "install", "--only-upgrade", "-y", "-o", "Dpkg::Options::=--force-confold", targetPkg)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	} else {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Unsupported upgrade source: %s", payload.Source), false, nil)
+		return
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	runErr := cmd.Run()
+
+	var exitCode int
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	stdoutStr := stdoutBuf.String()
+	stderrStr := stderrBuf.String()
+	rebootReq := exitCode == 3010 || exitCode == 1641
+
+	// Rescan inventory & available updates
+	scannedItems, sysReboot, _ := r.col.GetSoftwareInventory()
+	_ = r.SubmitInventory(scannedItems, sysReboot || rebootReq)
+
+	upgrades, _ := r.col.GetAvailableUpdates()
+	_ = r.SubmitAvailableUpdates(upgrades)
+
+	if exitCode == 0 || exitCode == 3010 || exitCode == 1641 {
+		r.ReportStatus(job.ID, "succeeded", &exitCode, stdoutStr, stderrStr, rebootReq || sysReboot, nil)
+	} else {
+		r.ReportStatus(job.ID, "failed", &exitCode, stdoutStr, stderrStr, rebootReq || sysReboot, nil)
+	}
 }

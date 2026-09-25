@@ -555,3 +555,452 @@ updatesRouter.get('/audit', updatesUserAuth, (req: AuthenticatedRequest, res: Re
     return res.status(500).json({ error: err.message });
   }
 });
+
+/* ==========================================================================
+   PACKAGE LIBRARY & INSTALL / UNINSTALL ENDPOINTS
+   ========================================================================== */
+
+/**
+ * Download package installer binary (supports Agent Bearer token OR Authenticated User)
+ */
+updatesRouter.get('/packages/download/:versionId', (req: Request, res: Response) => {
+  try {
+    // 1. Check Agent Token
+    let isAuthed = false;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const rawToken = authHeader.substring(7).trim();
+      const agentAuth = MonitoringService.authenticateAgentToken(rawToken);
+      if (agentAuth) {
+        isAuthed = true;
+      }
+    }
+
+    // 2. If not agent, check user cookie / auth
+    if (!isAuthed) {
+      authenticateUser(req as any, res, () => {
+        isAuthed = true;
+      });
+    }
+
+    const fileInfo = UpdatesService.getPackageVersionFile(req.params.versionId);
+    if (!fileInfo || !fs.existsSync(fileInfo.filePath)) {
+      return res.status(404).json({ error: 'Package version binary not found' });
+    }
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileInfo.fileName}"`);
+    return fs.createReadStream(fileInfo.filePath).pipe(res);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * List all packages
+ */
+updatesRouter.get('/packages', updatesUserAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pkgs = UpdatesService.getPackagesList(req.user!.userId);
+    return res.json(pkgs);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get package details by ID
+ */
+updatesRouter.get('/packages/:id', updatesUserAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pkg = UpdatesService.getPackageById(req.params.id);
+    if (!pkg) return res.status(404).json({ error: 'Package not found' });
+    return res.json(pkg);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new package (with optional file upload)
+ */
+updatesRouter.post('/packages', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const isMultipart = req.headers['content-type']?.includes('multipart/form-data');
+
+    if (!isMultipart) {
+      const { displayName, description, packageSourceType, wingetId, aptPackageName, versionData } = req.body;
+      const pkg = UpdatesService.createPackage(
+        { displayName, description, packageSourceType: packageSourceType || 'winget', wingetId, aptPackageName },
+        versionData,
+        undefined,
+        undefined,
+        req.user!.userId,
+        req.user!.username
+      );
+      return res.json({ success: true, package: pkg });
+    }
+
+    const bb = Busboy({ headers: req.headers });
+    const fields: Record<string, string> = {};
+    let fileBuffer: Buffer | null = null;
+    let fileName: string | undefined = undefined;
+
+    bb.on('field', (name, val) => {
+      fields[name] = val;
+    });
+
+    bb.on('file', (fieldname, file, info) => {
+      fileName = info.filename;
+      const chunks: Buffer[] = [];
+      file.on('data', (data) => chunks.push(data));
+      file.on('end', () => {
+        fileBuffer = Buffer.concat(chunks);
+      });
+    });
+
+    bb.on('finish', () => {
+      try {
+        const displayName = fields.displayName || fields.display_name;
+        if (!displayName) {
+          return res.status(400).json({ error: 'Display name is required' });
+        }
+
+        const packageSourceType = (fields.packageSourceType || fields.package_source_type || 'file') as any;
+        let versionData: any = undefined;
+
+        if (fields.version) {
+          versionData = {
+            version: fields.version,
+            targetOs: fields.targetOs || fields.target_os || 'windows',
+            targetArch: fields.targetArch || fields.target_arch || 'amd64',
+            silentInstallArgs: fields.silentInstallArgs || fields.silent_install_args,
+            uninstallCommand: fields.uninstallCommand || fields.uninstall_command,
+            expectedExitCodes: fields.expectedExitCodes || fields.expected_exit_codes || '0,3010,1641',
+            detectionName: fields.detectionName || fields.detection_name,
+            detectionVersion: fields.detectionVersion || fields.detection_version,
+            notes: fields.notes,
+          };
+        }
+
+        const pkg = UpdatesService.createPackage(
+          {
+            displayName,
+            description: fields.description,
+            packageSourceType,
+            wingetId: fields.wingetId || fields.winget_id,
+            aptPackageName: fields.aptPackageName || fields.apt_package_name,
+          },
+          versionData,
+          fileBuffer || undefined,
+          fileName,
+          req.user!.userId,
+          req.user!.username
+        );
+
+        return res.json({ success: true, package: pkg });
+      } catch (innerErr: any) {
+        return res.status(500).json({ error: innerErr.message });
+      }
+    });
+
+    req.pipe(bb);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Add a version to an existing package (with optional file upload)
+ */
+updatesRouter.post('/packages/:id/versions', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const packageId = req.params.id;
+    const isMultipart = req.headers['content-type']?.includes('multipart/form-data');
+
+    if (!isMultipart) {
+      const version = UpdatesService.addPackageVersion(
+        packageId,
+        req.body,
+        undefined,
+        undefined,
+        req.user!.userId,
+        req.user!.username
+      );
+      return res.json({ success: true, version });
+    }
+
+    const bb = Busboy({ headers: req.headers });
+    const fields: Record<string, string> = {};
+    let fileBuffer: Buffer | null = null;
+    let fileName: string | undefined = undefined;
+
+    bb.on('field', (name, val) => {
+      fields[name] = val;
+    });
+
+    bb.on('file', (fieldname, file, info) => {
+      fileName = info.filename;
+      const chunks: Buffer[] = [];
+      file.on('data', (data) => chunks.push(data));
+      file.on('end', () => {
+        fileBuffer = Buffer.concat(chunks);
+      });
+    });
+
+    bb.on('finish', () => {
+      try {
+        if (!fields.version) {
+          return res.status(400).json({ error: 'Version number is required' });
+        }
+
+        const versionData = {
+          version: fields.version,
+          targetOs: (fields.targetOs || fields.target_os || 'windows') as any,
+          targetArch: (fields.targetArch || fields.target_arch || 'amd64') as any,
+          silentInstallArgs: fields.silentInstallArgs || fields.silent_install_args,
+          uninstallCommand: fields.uninstallCommand || fields.uninstall_command,
+          expectedExitCodes: fields.expectedExitCodes || fields.expected_exit_codes || '0,3010,1641',
+          detectionName: fields.detectionName || fields.detection_name,
+          detectionVersion: fields.detectionVersion || fields.detection_version,
+          notes: fields.notes,
+        };
+
+        const version = UpdatesService.addPackageVersion(
+          packageId,
+          versionData,
+          fileBuffer || undefined,
+          fileName,
+          req.user!.userId,
+          req.user!.username
+        );
+
+        return res.json({ success: true, version });
+      } catch (innerErr: any) {
+        return res.status(500).json({ error: innerErr.message });
+      }
+    });
+
+    req.pipe(bb);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete a package version
+ */
+updatesRouter.delete('/packages/versions/:versionId', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    UpdatesService.deletePackageVersion(req.params.versionId, req.user!.userId, req.user!.username);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete entire package
+ */
+updatesRouter.delete('/packages/:id', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    UpdatesService.deletePackage(req.params.id, req.user!.userId, req.user!.username);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Queue Package Install across selected devices (Wizard Submission)
+ */
+updatesRouter.post('/install', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { packageVersionId, deviceIds, customArgs, expiresAt } = req.body;
+    if (!packageVersionId || !Array.isArray(deviceIds) || deviceIds.length === 0) {
+      return res.status(400).json({ error: 'packageVersionId and deviceIds array are required' });
+    }
+
+    const result = UpdatesService.queuePackageInstall(
+      packageVersionId,
+      deviceIds,
+      customArgs,
+      req.user!.userId,
+      req.user!.username,
+      expiresAt || null
+    );
+
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Queue Remote Uninstall for an inventory item
+ */
+updatesRouter.post('/uninstall', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { deviceId, inventoryId, customCommand, expiresAt } = req.body;
+    if (!deviceId || !inventoryId) {
+      return res.status(400).json({ error: 'deviceId and inventoryId are required' });
+    }
+
+    const jobId = UpdatesService.queueUninstall(
+      deviceId,
+      inventoryId,
+      customCommand,
+      req.user!.userId,
+      req.user!.username,
+      expiresAt || null
+    );
+
+    return res.json({ success: true, jobId });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================================================
+   AVAILABLE UPDATES & UPGRADE ENDPOINTS
+   ========================================================================== */
+
+/**
+ * Get available updates list
+ */
+updatesRouter.get('/available', updatesUserAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const data = UpdatesService.getAvailableUpdatesList(req.user!.userId);
+    return res.json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Queue app upgrade on single device
+ */
+updatesRouter.post('/upgrade', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { deviceId, updateId, expiresAt } = req.body;
+    if (!deviceId || !updateId) {
+      return res.status(400).json({ error: 'deviceId and updateId are required' });
+    }
+
+    const jobId = UpdatesService.queueAppUpgrade(
+      deviceId,
+      updateId,
+      req.user!.userId,
+      req.user!.username,
+      expiresAt || null
+    );
+
+    return res.json({ success: true, jobId });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Queue fleet app upgrade across all devices with update detected
+ */
+updatesRouter.post('/upgrade-fleet', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { appName, packageIdentifier, availableVersion, deviceIds, expiresAt } = req.body;
+    if (!appName) {
+      return res.status(400).json({ error: 'appName is required' });
+    }
+
+    const result = UpdatesService.queueFleetAppUpgrade(
+      appName,
+      packageIdentifier,
+      availableVersion,
+      deviceIds,
+      req.user!.userId,
+      req.user!.username,
+      expiresAt || null
+    );
+
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Trigger update check across all monitored devices
+ */
+updatesRouter.post('/check-all', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = UpdatesService.checkUpdatesAllDevices(req.user!.userId, req.user!.username);
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Trigger update check on single device
+ */
+updatesRouter.post('/check-device/:deviceId', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const jobId = UpdatesService.checkUpdatesSingleDevice(req.params.deviceId, req.user!.userId, req.user!.username);
+    return res.json({ success: true, jobId });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================================================
+   APP PINNING ENDPOINTS
+   ========================================================================== */
+
+/**
+ * Get all app pins
+ */
+updatesRouter.get('/pins', updatesUserAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const pins = UpdatesService.getAppPins(req.user!.userId);
+    return res.json(pins);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Set app pin (global or device-specific)
+ */
+updatesRouter.post('/pins', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { appName, pinType, pinnedVersion, deviceId, reason } = req.body;
+    if (!appName || !pinType) {
+      return res.status(400).json({ error: 'appName and pinType are required' });
+    }
+
+    const pin = UpdatesService.setAppPin(
+      appName,
+      pinType,
+      pinnedVersion,
+      deviceId,
+      reason,
+      req.user!.userId,
+      req.user!.username
+    );
+
+    return res.json({ success: true, pin });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete app pin
+ */
+updatesRouter.delete('/pins/:id', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    UpdatesService.deleteAppPin(req.params.id, req.user!.userId, req.user!.username);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});

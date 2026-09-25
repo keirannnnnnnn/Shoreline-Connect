@@ -341,7 +341,7 @@ export interface UpdateJob {
   device_id: string;
   device_name?: string;
   job_type: 'inventory_scan' | 'check_updates' | 'install' | 'uninstall' | 'upgrade' | 'agent_update' | 'run_script';
-  status: 'queued' | 'waiting_for_device' | 'sent' | 'downloading' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+  status: 'queued' | 'waiting_for_device' | 'sent' | 'downloading' | 'running' | 'succeeded' | 'succeeded_not_detected' | 'failed' | 'timed_out' | 'cancelled';
   payload_json: string;
   exit_code?: number | null;
   stdout?: string | null;
@@ -441,5 +441,87 @@ export interface ScriptVersionItem {
   notes?: string | null;
   created_by_username: string;
   created_at: string;
+}
+
+export interface PackageVersionItem {
+  id: string;
+  package_id: string;
+  version: string;
+  target_os: 'windows' | 'linux' | 'all';
+  target_arch: 'amd64' | 'arm64' | 'all';
+  file_path?: string | null;
+  file_sha256?: string | null;
+  file_size_bytes?: number;
+  silent_install_args?: string | null;
+  uninstall_command?: string | null;
+  expected_exit_codes?: string | null;
+  detection_name?: string | null;
+  detection_version?: string | null;
+  notes?: string | null;
+  created_by_username?: string;
+  created_at: string;
+  installed_device_count?: number;
+}
+
+export interface PackageItem {
+  id: string;
+  display_name: string;
+  description?: string | null;
+  package_source_type: 'file' | 'winget' | 'apt';
+  winget_id?: string | null;
+  apt_package_name?: string | null;
+  created_by_username?: string;
+  created_at: string;
+  updated_at: string;
+  versions?: PackageVersionItem[];
+  total_size_bytes?: number;
+  latest_version?: string;
+  installed_device_count?: number;
+}
+
+export interface AvailableUpdateDeviceItem {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  name: string;
+  currentVersion: string;
+  availableVersion: string;
+  packageIdentifier?: string;
+  source: string;
+  isSecurity: boolean;
+  requiresReboot: boolean;
+  detectedAt: string;
+  pin?: AppPinItem | null;
+  isIgnored?: boolean;
+}
+
+export interface AvailableUpdateGroup {
+  name: string;
+  packageIdentifier?: string;
+  availableVersion: string;
+  source: string;
+  isSecurity: boolean;
+  requiresReboot: boolean;
+  pin?: AppPinItem | null;
+  devices: AvailableUpdateDeviceItem[];
+}
+
+export interface AppPinItem {
+  id: string;
+  device_id?: string | null;
+  device_name?: string;
+  app_name: string;
+  pin_type: 'ignore' | 'pin_version';
+  pinned_version?: string | null;
+  reason?: string | null;
+  created_by_username: string;
+  created_at: string;
+}
+
+export interface DeviceTag {
+  id: string;
+  deviceId: string;
+  tag: string;
+  createdAt: string;
 }
 

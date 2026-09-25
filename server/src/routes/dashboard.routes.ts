@@ -47,6 +47,16 @@ export const WIDGET_CATALOG: WidgetCatalogItem[] = [
     category: 'system',
     icon: 'server.rack',
     defaultSize: { w: 6, h: 4 },
+  },
+  {
+    id: 'updates-available',
+    type: 'updates-available',
+    title: 'Software Updates Available',
+    description: 'Displays outstanding software and package updates across your managed fleet with one-click upgrade actions.',
+    category: 'monitoring',
+    requiredTab: 'updates',
+    icon: 'arrow.triangle.2.circlepath',
+    defaultSize: { w: 6, h: 4 },
   }
 ];
 

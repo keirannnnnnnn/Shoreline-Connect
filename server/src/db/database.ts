@@ -351,6 +351,19 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_cloud_folder_meta ON cloud_folder_metadata(user_id, folder_path);
 
+    /* --- Device Tags / Groups Subsystem --- */
+    CREATE TABLE IF NOT EXISTS device_tags (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+      UNIQUE(device_id, tag)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_device_tags_dev ON device_tags(device_id);
+    CREATE INDEX IF NOT EXISTS idx_device_tags_tag ON device_tags(tag);
+
     /* --- Build 4: Updates & Software Management Subsystem --- */
     CREATE TABLE IF NOT EXISTS software_inventory (
       id TEXT PRIMARY KEY,
@@ -395,6 +408,7 @@ export function initDatabase() {
       name TEXT NOT NULL,
       current_version TEXT,
       available_version TEXT NOT NULL,
+      package_identifier TEXT,
       source TEXT NOT NULL,
       is_security INTEGER DEFAULT 0,
       requires_reboot INTEGER DEFAULT 0,
@@ -463,7 +477,7 @@ export function initDatabase() {
       id TEXT PRIMARY KEY,
       device_id TEXT NOT NULL,
       job_type TEXT NOT NULL CHECK (job_type IN ('inventory_scan', 'check_updates', 'install', 'uninstall', 'upgrade', 'agent_update', 'run_script')),
-      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled', 'succeeded_not_detected')),
       payload_json TEXT NOT NULL,
       exit_code INTEGER,
       stdout TEXT,
@@ -553,17 +567,20 @@ export function initDatabase() {
     db.exec('ALTER TABLE monitoring_agents ADD COLUMN agent_version TEXT;');
   } catch {}
 
-  // Migrate update_jobs table if expires_at has NOT NULL constraint
   try {
-    const cols = db.prepare("PRAGMA table_info(update_jobs)").all() as Array<{ name: string; notnull: number }>;
-    const expCol = cols.find(c => c.name === 'expires_at');
-    if (expCol && expCol.notnull === 1) {
+    db.exec('ALTER TABLE device_available_updates ADD COLUMN package_identifier TEXT;');
+  } catch {}
+
+  // Migrate update_jobs table if needed
+  try {
+    const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='update_jobs'").get() as { sql: string } | undefined;
+    if (tableInfo?.sql && !tableInfo.sql.includes('succeeded_not_detected')) {
       db.exec(`
         CREATE TABLE IF NOT EXISTS update_jobs_migration (
           id TEXT PRIMARY KEY,
           device_id TEXT NOT NULL,
           job_type TEXT NOT NULL CHECK (job_type IN ('inventory_scan', 'check_updates', 'install', 'uninstall', 'upgrade', 'agent_update', 'run_script')),
-          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled', 'succeeded_not_detected')),
           payload_json TEXT NOT NULL,
           exit_code INTEGER,
           stdout TEXT,
@@ -607,6 +624,9 @@ export function initDatabase() {
   insertSetting.run('tracking_map_provider', 'leaflet');
   insertSetting.run('google_maps_api_key', '');
   insertSetting.run('cloud_storage_base_path', '');
+  insertSetting.run('updates_fleet_concurrency', '5');
+  insertSetting.run('updates_inventory_scan_interval_minutes', '60');
+  insertSetting.run('updates_detection_interval_minutes', '60');
 
   // Ensure tab_group_updates is not blank on migration
   try {

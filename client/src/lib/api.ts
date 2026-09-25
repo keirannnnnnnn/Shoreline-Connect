@@ -1,4 +1,4 @@
-import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage, UpdatesOverview, SoftwareGroup, SoftwareInventoryHistoryItem, UpdateJob, UpdateAuditLog, AgentItem, AgentBuildItem, ScriptItem } from '../types/index.js';
+import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage, UpdatesOverview, SoftwareGroup, SoftwareInventoryHistoryItem, UpdateJob, UpdateAuditLog, AgentItem, AgentBuildItem, ScriptItem, PackageItem, PackageVersionItem, AvailableUpdateDeviceItem, AvailableUpdateGroup, AppPinItem } from '../types/index.js';
 
 const API_BASE = '/api';
 
@@ -67,6 +67,13 @@ export const api = {
     getConnectToken: (id: string) =>
       fetchJson<{ token: string; device: { id: string; name: string; protocol: string } }>('/devices/' + id + '/connect-token', {
         method: 'POST',
+      }),
+    getAllTags: () => fetchJson<{ tags: string[] }>('/devices/tags/all'),
+    getDeviceTags: (id: string) => fetchJson<{ tags: string[] }>(`/devices/${id}/tags`),
+    setDeviceTags: (id: string, tags: string[]) =>
+      fetchJson<{ success: boolean; tags: string[] }>(`/devices/${id}/tags`, {
+        method: 'POST',
+        body: JSON.stringify({ tags }),
       }),
   },
 
@@ -497,6 +504,111 @@ export const api = {
       }),
     getAuditLogs: (limit: number = 200) =>
       fetchJson<UpdateAuditLog[]>(`/updates/audit?limit=${limit}`),
+
+    // Package Library
+    getPackages: () =>
+      fetchJson<PackageItem[]>('/updates/packages'),
+    getPackage: (id: string) =>
+      fetchJson<PackageItem>(`/updates/packages/${id}`),
+    createPackage: async (formDataOrJson: FormData | any) => {
+      if (formDataOrJson instanceof FormData) {
+        const token = localStorage.getItem('token');
+        const res = await fetch('/api/updates/packages', {
+          method: 'POST',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: formDataOrJson,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Package creation failed' }));
+          throw new Error(err.error || 'Failed to create package');
+        }
+        return res.json() as Promise<{ success: boolean; package: PackageItem }>;
+      } else {
+        return fetchJson<{ success: boolean; package: PackageItem }>('/updates/packages', {
+          method: 'POST',
+          body: JSON.stringify(formDataOrJson),
+        });
+      }
+    },
+    addPackageVersion: async (packageId: string, formDataOrJson: FormData | any) => {
+      if (formDataOrJson instanceof FormData) {
+        const token = localStorage.getItem('token');
+        const res = await fetch(`/api/updates/packages/${packageId}/versions`, {
+          method: 'POST',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: formDataOrJson,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Version creation failed' }));
+          throw new Error(err.error || 'Failed to add package version');
+        }
+        return res.json() as Promise<{ success: boolean; version: PackageVersionItem }>;
+      } else {
+        return fetchJson<{ success: boolean; version: PackageVersionItem }>(`/updates/packages/${packageId}/versions`, {
+          method: 'POST',
+          body: JSON.stringify(formDataOrJson),
+        });
+      }
+    },
+    deletePackageVersion: (versionId: string) =>
+      fetchJson<{ success: boolean }>(`/updates/packages/versions/${versionId}`, {
+        method: 'DELETE',
+      }),
+    deletePackage: (packageId: string) =>
+      fetchJson<{ success: boolean }>(`/updates/packages/${packageId}`, {
+        method: 'DELETE',
+      }),
+
+    // Install / Uninstall
+    installPackage: (data: { packageVersionId: string; deviceIds: string[]; customArgs?: string; expiresAt?: string | null }) =>
+      fetchJson<{ success: boolean; queuedCount: number; jobIds: string[] }>('/updates/install', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    uninstall: (data: { deviceId: string; inventoryId: string; customCommand?: string; expiresAt?: string | null }) =>
+      fetchJson<{ success: boolean; jobId: string }>('/updates/uninstall', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+
+    // Available Updates & Upgrades
+    getAvailableUpdates: () =>
+      fetchJson<{ updates: AvailableUpdateDeviceItem[]; appGroups: AvailableUpdateGroup[] }>('/updates/available'),
+    upgradeApp: (data: { deviceId: string; updateId: string; expiresAt?: string | null }) =>
+      fetchJson<{ success: boolean; jobId: string }>('/updates/upgrade', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    upgradeFleet: (data: { appName: string; packageIdentifier?: string; availableVersion?: string; deviceIds?: string[]; expiresAt?: string | null }) =>
+      fetchJson<{ success: boolean; queuedCount: number; jobIds: string[] }>('/updates/upgrade-fleet', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    checkUpdatesAll: () =>
+      fetchJson<{ success: boolean; queuedCount: number }>('/updates/check-all', {
+        method: 'POST',
+      }),
+    checkUpdatesDevice: (deviceId: string) =>
+      fetchJson<{ success: boolean; jobId: string }>(`/updates/check-device/${deviceId}`, {
+        method: 'POST',
+      }),
+
+    // App Pins
+    getPins: () =>
+      fetchJson<AppPinItem[]>('/updates/pins'),
+    setPin: (data: { appName: string; pinType: 'ignore' | 'pin_version'; pinnedVersion?: string | null; deviceId?: string | null; reason?: string | null }) =>
+      fetchJson<{ success: boolean; pin: AppPinItem }>('/updates/pins', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    deletePin: (id: string) =>
+      fetchJson<{ success: boolean }>(`/updates/pins/${id}`, {
+        method: 'DELETE',
+      }),
   },
 };
 

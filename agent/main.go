@@ -181,16 +181,16 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 	reportURL := fmt.Sprintf("%s/api/monitoring/report", hubURL)
 
 	// Periodic Timers:
-	// - Metric ticker (15s)
-	// - Inventory scan (every 6 hours + initial on startup)
-	// - Update check (every 24 hours)
+	// - Metric ticker (default 15s)
+	// - Inventory scan (hourly + initial on startup)
+	// - Update check (hourly + initial on startup)
 	metricsTicker := time.NewTicker(interval)
 	defer metricsTicker.Stop()
 
-	inventoryTicker := time.NewTicker(6 * time.Hour)
+	inventoryTicker := time.NewTicker(1 * time.Hour)
 	defer inventoryTicker.Stop()
 
-	updatesTicker := time.NewTicker(24 * time.Hour)
+	updatesTicker := time.NewTicker(1 * time.Hour)
 	defer updatesTicker.Stop()
 
 	// Initial background discovery scans (non-blocking)
@@ -199,6 +199,12 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 		jobRunner.ExecuteJob(collector.JobPayload{
 			ID:          "startup_inventory",
 			JobType:     "inventory_scan",
+			PayloadJSON: "{}",
+		})
+		time.Sleep(5 * time.Second)
+		jobRunner.ExecuteJob(collector.JobPayload{
+			ID:          "startup_updates",
+			JobType:     "check_updates",
 			PayloadJSON: "{}",
 		})
 	}()

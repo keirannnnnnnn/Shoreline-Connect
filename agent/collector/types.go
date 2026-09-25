@@ -71,12 +71,13 @@ type SoftwareItem struct {
 }
 
 type AvailableUpdateItem struct {
-	Name             string `json:"name"`
-	CurrentVersion   string `json:"current_version,omitempty"`
-	AvailableVersion string `json:"available_version"`
-	Source           string `json:"source"`
-	IsSecurity       bool   `json:"is_security,omitempty"`
-	RequiresReboot   bool   `json:"requires_reboot,omitempty"`
+	Name              string `json:"name"`
+	PackageIdentifier string `json:"package_identifier,omitempty"`
+	CurrentVersion    string `json:"current_version,omitempty"`
+	AvailableVersion  string `json:"available_version"`
+	Source            string `json:"source"`
+	IsSecurity        bool   `json:"is_security,omitempty"`
+	RequiresReboot    bool   `json:"requires_reboot,omitempty"`
 }
 
 type JobPayload struct {

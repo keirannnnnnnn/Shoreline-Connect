@@ -191,12 +191,13 @@ func (c *LinuxCollector) GetAvailableUpdates() ([]AvailableUpdateItem, error) {
 					requiresReboot := strings.Contains(strings.ToLower(pkgName), "linux-image")
 
 					updates = append(updates, AvailableUpdateItem{
-						Name:             pkgName,
-						CurrentVersion:   currVer,
-						AvailableVersion: availVer,
-						Source:           "apt",
-						IsSecurity:       isSecurity,
-						RequiresReboot:   requiresReboot,
+						Name:              pkgName,
+						PackageIdentifier: pkgName,
+						CurrentVersion:    currVer,
+						AvailableVersion:  availVer,
+						Source:            "apt",
+						IsSecurity:        isSecurity,
+						RequiresReboot:    requiresReboot,
 					})
 				}
 			}

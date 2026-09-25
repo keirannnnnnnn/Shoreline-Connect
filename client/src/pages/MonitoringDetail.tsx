@@ -498,6 +498,63 @@ export const MonitoringDetail: React.FC = () => {
           </div>
         )}
 
+        {/* Software Management & Updates Quick Card */}
+        {id && (
+          <div className="p-5 rounded-3xl bg-surface-card border border-surface-border flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-10 h-10 rounded-2xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center flex-shrink-0">
+                <SymbolIcon name="arrow.triangle.2.circlepath" className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">Software Inventory & Updates</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Inspect installed applications, detect updates, deploy packages, and manage agent binaries.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={async () => {
+                  try {
+                    await api.updates.rescanDevice(id);
+                    alert('Inventory rescan job queued for device.');
+                  } catch (e: any) {
+                    alert(e.message || 'Failed to trigger rescan');
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-slate-300 text-xs font-semibold transition-all flex items-center gap-1.5"
+              >
+                <SymbolIcon name="arrow.trianglehead.2.clockwise" className="w-3.5 h-3.5 text-slate-400" />
+                <span>Rescan Software</span>
+              </button>
+
+              <button
+                onClick={async () => {
+                  try {
+                    await api.updates.checkUpdatesDevice(id);
+                    alert('Update check job queued for device.');
+                  } catch (e: any) {
+                    alert(e.message || 'Failed to check updates');
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-surface hover:bg-surface-hover border border-surface-border text-slate-300 text-xs font-semibold transition-all flex items-center gap-1.5"
+              >
+                <SymbolIcon name="magnifyingglass" className="w-3.5 h-3.5 text-slate-400" />
+                <span>Check Updates</span>
+              </button>
+
+              <Link
+                to="/updates"
+                className="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-glow transition-all flex items-center gap-1.5"
+              >
+                <span>Open Updates Tab</span>
+                <SymbolIcon name="chevron.right" className="w-3 h-3" />
+              </Link>
+            </div>
+          </div>
+        )}
+
       </main>
 
       {/* Install Command & Token Modal */}

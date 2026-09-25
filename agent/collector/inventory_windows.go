@@ -190,15 +190,86 @@ func findWingetPath() string {
 	return ""
 }
 
-// Detect available software updates on Windows using WinGet
+// Detect available software updates on Windows using WinGet (Microsoft.WinGet.Client PowerShell module first, table fallback)
 func (c *WindowsCollector) GetAvailableUpdates() ([]AvailableUpdateItem, error) {
+	// 1. Try PowerShell Microsoft.WinGet.Client module first
+	psScript := `
+$ErrorActionPreference = "Stop"
+try {
+    Import-Module Microsoft.WinGet.Client -ErrorAction Stop
+    $pkgs = Get-WinGetPackage -Scope Machine -Source winget | Where-Object { $_.IsUpdateAvailable }
+    $res = @()
+    foreach ($p in $pkgs) {
+        $avail = ""
+        if ($p.AvailableVersions -and $p.AvailableVersions.Count -gt 0) {
+            $avail = [string]$p.AvailableVersions[0]
+        }
+        $res += [PSCustomObject]@{
+            name = [string]$p.Name
+            id = [string]$p.Id
+            current = [string]$p.InstalledVersion
+            available = $avail
+        }
+    }
+    $res | ConvertTo-Json -Compress
+} catch {
+    exit 2
+}
+`
+	psCmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+	psOut, psErr := psCmd.CombinedOutput()
+	if psErr == nil && len(strings.TrimSpace(string(psOut))) > 0 {
+		var rawResults []struct {
+			Name      string `json:"name"`
+			ID        string `json:"id"`
+			Current   string `json:"current"`
+			Available string `json:"available"`
+		}
+
+		trimmed := strings.TrimSpace(string(psOut))
+		// Check if single object or array
+		if strings.HasPrefix(trimmed, "{") {
+			var single struct {
+				Name      string `json:"name"`
+				ID        string `json:"id"`
+				Current   string `json:"current"`
+				Available string `json:"available"`
+			}
+			if err := json.Unmarshal([]byte(trimmed), &single); err == nil {
+				rawResults = append(rawResults, single)
+			}
+		} else {
+			_ = json.Unmarshal([]byte(trimmed), &rawResults)
+		}
+
+		if len(rawResults) > 0 {
+			var updates []AvailableUpdateItem
+			for _, r := range rawResults {
+				name := r.Name
+				if name == "" {
+					name = r.ID
+				}
+				updates = append(updates, AvailableUpdateItem{
+					Name:              name,
+					PackageIdentifier: r.ID,
+					CurrentVersion:    r.Current,
+					AvailableVersion:  r.Available,
+					Source:            "winget",
+					IsSecurity:        false,
+					RequiresReboot:    false,
+				})
+			}
+			return updates, nil
+		}
+	}
+
+	// 2. Fallback: table parsing via winget CLI with --disable-interactivity
 	wingetPath := findWingetPath()
 	if wingetPath == "" {
 		return nil, fmt.Errorf("winget not available on this system")
 	}
 
-	// Run: winget upgrade --scope machine --source winget --accept-source-agreements
-	cmd := exec.Command(wingetPath, "upgrade", "--scope", "machine", "--source", "winget", "--accept-source-agreements")
+	cmd := exec.Command(wingetPath, "upgrade", "--scope", "machine", "--source", "winget", "--accept-source-agreements", "--disable-interactivity")
 	out, err := cmd.CombinedOutput()
 	if err != nil && len(out) == 0 {
 		return nil, fmt.Errorf("failed to run winget upgrade: %w", err)
@@ -220,18 +291,24 @@ func (c *WindowsCollector) GetAvailableUpdates() ([]AvailableUpdateItem, error) 
 
 		fields := strings.Fields(trimmed)
 		if len(fields) >= 4 {
-			// Typical format: Name  Id  Version  Available  Source
-			name := fields[0]
+			// Typical output format: Name Id Version Available Source
+			// Key strictly on Id (package ID)
 			availVer := fields[len(fields)-2]
 			currVer := fields[len(fields)-3]
+			pkgId := fields[len(fields)-4]
+			name := strings.Join(fields[:len(fields)-4], " ")
+			if name == "" {
+				name = pkgId
+			}
 
 			updates = append(updates, AvailableUpdateItem{
-				Name:             name,
-				CurrentVersion:   currVer,
-				AvailableVersion: availVer,
-				Source:           "winget",
-				IsSecurity:       false,
-				RequiresReboot:   false,
+				Name:              name,
+				PackageIdentifier: pkgId,
+				CurrentVersion:    currVer,
+				AvailableVersion:  availVer,
+				Source:            "winget",
+				IsSecurity:        false,
+				RequiresReboot:    false,
 			})
 		}
 	}

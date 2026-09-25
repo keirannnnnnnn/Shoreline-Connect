@@ -228,4 +228,47 @@ router.delete('/folders/:id', (req: AuthenticatedRequest, res) => {
   }
 });
 
+/**
+ * GET /api/devices/tags/all
+ * Retrieve all unique device tags for current user
+ */
+router.get('/tags/all', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const tags = DeviceService.getAllTags(userId);
+    res.json({ tags });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/devices/:id/tags
+ */
+router.get('/:id/tags', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tags = DeviceService.getDeviceTags(req.params.id);
+    res.json({ tags });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/devices/:id/tags
+ */
+router.post('/:id/tags', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { tags } = req.body;
+    if (!Array.isArray(tags)) {
+      return res.status(400).json({ error: 'tags must be an array of strings' });
+    }
+    const updatedTags = DeviceService.setDeviceTags(req.params.id, tags, userId);
+    res.json({ success: true, tags: updatedTags });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 export default router;

@@ -1105,6 +1105,70 @@ export const Settings: React.FC = () => {
                         When configured or auto-detected via Tailscale (100.64.0.0/10), agent install commands and telemetry reporting target this internal IP directly without hitting public reverse proxy / Zero Trust auth walls.
                       </p>
                     </div>
+
+                    {/* Updates & Software Management Fleet Settings */}
+                    <div className="sm:col-span-2 pt-4 border-t border-surface-border space-y-3">
+                      <div>
+                        <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                          <SymbolIcon name="arrow.triangle.2.circlepath" className="w-4 h-4 text-purple-400" />
+                          <span>Updates & Software Deployment Settings</span>
+                        </h3>
+                        <p className="text-[11px] text-slate-400">
+                          Configure fleet execution concurrency caps and automated background scan cadences.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1">
+                            Fleet Concurrency Limit
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="50"
+                            value={adSettings.updates_fleet_concurrency || '5'}
+                            onChange={(e) => setAdSettings({ ...adSettings, updates_fleet_concurrency: e.target.value })}
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-purple-500 focus:outline-none"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            Max simultaneous heavy jobs (installs, uninstalls, upgrades, scripts).
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1">
+                            Inventory Scan Interval (Min)
+                          </label>
+                          <input
+                            type="number"
+                            min="5"
+                            value={adSettings.updates_inventory_scan_interval_minutes || '60'}
+                            onChange={(e) => setAdSettings({ ...adSettings, updates_inventory_scan_interval_minutes: e.target.value })}
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-purple-500 focus:outline-none"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            Periodic full software inventory collection interval.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1">
+                            Update Check Interval (Min)
+                          </label>
+                          <input
+                            type="number"
+                            min="5"
+                            value={adSettings.updates_detection_interval_minutes || '60'}
+                            onChange={(e) => setAdSettings({ ...adSettings, updates_detection_interval_minutes: e.target.value })}
+                            className="w-full px-3.5 py-2 rounded-xl bg-surface border border-surface-border text-white text-xs font-mono focus:ring-1 focus:ring-purple-500 focus:outline-none"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            Periodic winget / apt update discovery interval.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="pt-4 border-t border-surface-border flex justify-end">

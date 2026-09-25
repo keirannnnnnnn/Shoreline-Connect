@@ -703,7 +703,28 @@ mv -f "\$TMP_BIN" "\$TARGET_BIN"
 echo "-> Installed binary to \$TARGET_BIN"
 
 echo "-> Registering and starting systemd service..."
-"\$TARGET_BIN" -install -hub "\$HUB_URL" -token "\$TOKEN"
+if ! "\$TARGET_BIN" -install -hub "\$HUB_URL" -token "\$TOKEN"; then
+  echo "❌ Error: Agent installation failed."
+  exit 1
+fi
+
+# Verify service is running
+SERVICE_RUNNING=0
+for i in {1..10}; do
+  if systemctl is-active --quiet shoreline-agent 2>/dev/null; then
+    SERVICE_RUNNING=1
+    break
+  fi
+  sleep 1
+done
+
+if [ \$SERVICE_RUNNING -ne 1 ]; then
+  echo ""
+  echo "=================================================="
+  echo "❌ Error: shoreline-agent service failed to start."
+  echo "=================================================="
+  exit 1
+fi
 
 echo ""
 echo "=================================================="
@@ -716,7 +737,7 @@ echo "=================================================="
    * Generate Windows PowerShell installation script on the fly
    */
   static generateWindowsInstallScript(hostUrl: string, token: string): string {
-    return `$ErrorActionPreference = "Continue"
+    return `$ErrorActionPreference = "Stop"
 
 $HubUrl = "${hostUrl}"
 $Token = "${token}"
@@ -731,7 +752,7 @@ if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     } catch {
         Write-Host "❌ Failed to create install directory: $_" -ForegroundColor Red
-        return
+        exit 1
     }
 }
 
@@ -758,34 +779,42 @@ try {
 } catch {
     Write-Host "❌ Failed to download agent binary: $_" -ForegroundColor Red
     if (Test-Path $TempExePath) { Remove-Item -Path $TempExePath -Force -ErrorAction SilentlyContinue }
-    return
+    exit 1
 }
 
 Write-Host "-> Registering and starting Windows service..." -ForegroundColor Yellow
-& "$ExePath" -install -hub "$HubUrl" -token "$Token"
-$exitCode = $LASTEXITCODE
+$installProcess = Start-Process -FilePath "$ExePath" -ArgumentList "-install -hub \`"$HubUrl\`" -token \`"$Token\`"" -Wait -PassThru -NoNewWindow
+$exitCode = $installProcess.ExitCode
 
 if ($exitCode -ne 0) {
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Red
-    Write-Host "❌ Installation failed with exit code: $exitCode. See details above." -ForegroundColor Red
+    Write-Host "❌ Installation failed with exit code: $exitCode." -ForegroundColor Red
     Write-Host "==================================================" -ForegroundColor Red
-    return
+    exit 1
 }
 
-Start-Sleep -Seconds 2
-$svc = Get-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
+$serviceRunning = $false
+for ($i = 0; $i -lt 10; $i++) {
+    Start-Sleep -Seconds 1
+    $svc = Get-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {
+        $serviceRunning = $true
+        break
+    }
+}
 
-if ($svc -and ($svc.Status -eq "Running" -or $svc.Status -eq "StartPending")) {
+if ($serviceRunning) {
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Green
     Write-Host "✅ Shoreline Monitoring Agent service is active and running!" -ForegroundColor Green
     Write-Host "==================================================" -ForegroundColor Green
 } else {
     Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Yellow
-    Write-Host "⚠️ Service registered. Current status: $($svc.Status)" -ForegroundColor Yellow
-    Write-Host "==================================================" -ForegroundColor Yellow
+    Write-Host "==================================================" -ForegroundColor Red
+    Write-Host "❌ Service failed to reach 'Running' state. Status: $($svc.Status)" -ForegroundColor Red
+    Write-Host "==================================================" -ForegroundColor Red
+    exit 1
 }
 `;
   }

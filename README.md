@@ -58,11 +58,20 @@ Shoreline Connect features a native software management subsystem powered by the
   - Gated by Active Directory group: `Shoreline Connect Updates Users` (configurable in **Settings** &rarr; `tab_group_updates`).
   - Standard users can explore software inventory, view pending/active jobs, and review history.
   - Install, uninstall, upgrade, script execution, and agent self-update actions strictly require membership in `Shoreline Connect Administrators`.
-- **Zero-Dependency Go Agent (v1.1.0)**:
+- **Zero-Dependency Go Agent (v1.2.0)**:
   - Supports Windows Registry discovery (`Uninstall` + `WOW6432Node` + user hives) with silent uninstaller extraction and MSI GUID detection.
-  - Supports Linux package discovery (`dpkg`, `snap`, `flatpak`).
-  - Integrated with WinGet (`--scope machine --source winget`).
-  - Includes a background job worker and self-update engine with automated rollback watchdog.
+  - PowerShell `Microsoft.WinGet.Client` module integration with table parsing fallback keyed on Package IDs for update detection.
+  - Linux package discovery (`dpkg`, `snap`, `flatpak`) and non-interactive update detection via `apt list --upgradable` and `snap refresh --list`.
+  - Comprehensive job runner supporting `.exe`, `.msi`, `.msix`, `.deb`, WinGet, APT, Snap, custom scripts, and self-update watchdog.
+- **Package Library & Install Wizard**:
+  - Versioned package repository supporting installer file uploads (`.exe`, `.msi`, `.deb`), WinGet IDs, and APT packages.
+  - 4-step guided Install Wizard: Package selection &rarr; Device & Tag targeting &rarr; Pre-flight & Arguments &rarr; Confirmation.
+- **Update Detection & Pinning**:
+  - Grouped & Flat available updates views with "Update Everywhere" fleet actions.
+  - Global and per-device Pin/Ignore rules to exempt specific apps or versions from upgrade suggestions.
+- **Device Tags & Fleet Concurrency**:
+  - Assign arbitrary tags (`#production`, `#lab`, `#finance`) to devices for filtered deployments.
+  - Configurable fleet concurrency limits for heavy jobs (installs, uninstalls, upgrades, scripts, self-updates) while scans run unthrottled.
 
 ### 🌐 Nginx Proxy Manager (NPM) Configuration
 For package uploads (e.g. large `.exe`, `.msi`, `.deb` installers up to 500MB), add the following directive to the **Advanced** tab of your Shoreline Connect proxy host in Nginx Proxy Manager:
@@ -71,7 +80,7 @@ For package uploads (e.g. large `.exe`, `.msi`, `.deb` installers up to 500MB), 
 client_max_body_size 500M;
 ```
 
-### 🔄 Agent Upgrade / Reinstallation (v1.1.0)
+### 🔄 Agent Upgrade / Reinstallation (v1.2.0)
 To enable software discovery and the command channel across your fleet, update the agent on each device once:
 
 #### Windows (PowerShell as Administrator)
@@ -88,3 +97,4 @@ sudo systemctl stop shoreline-agent
 sudo systemctl start shoreline-agent
 ```
 *(Subsequent agent updates can be triggered directly from the Shoreline Connect UI using the built-in self-update feature).*
+

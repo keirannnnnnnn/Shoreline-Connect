@@ -4,6 +4,7 @@ import path from 'path';
 import { db } from '../db/database.js';
 import { config } from '../config/env.js';
 import { DeviceService } from './device.service.js';
+import { NotificationService } from './notification.service.js';
 
 export interface SoftwareInventoryItem {
   softwareKey: string;
@@ -24,9 +25,61 @@ export interface AvailableUpdateItem {
   name: string;
   currentVersion?: string;
   availableVersion: string;
+  packageIdentifier?: string;
   source: string;
   isSecurity?: boolean;
   requiresReboot?: boolean;
+}
+
+export interface PackageRecord {
+  id: string;
+  display_name: string;
+  description?: string | null;
+  package_source_type: 'file' | 'winget' | 'apt';
+  winget_id?: string | null;
+  apt_package_name?: string | null;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
+  updated_at: string;
+  total_size_bytes?: number;
+  installed_device_count?: number;
+  latest_version?: string;
+  versions?: PackageVersionRecord[];
+}
+
+export interface PackageVersionRecord {
+  id: string;
+  package_id: string;
+  version: string;
+  target_os: 'windows' | 'linux' | 'all';
+  target_arch: 'amd64' | 'arm64' | 'all';
+  file_path?: string | null;
+  file_sha256?: string | null;
+  file_size_bytes: number;
+  silent_install_args?: string | null;
+  uninstall_command?: string | null;
+  expected_exit_codes: string;
+  detection_name?: string | null;
+  detection_version?: string | null;
+  notes?: string | null;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
+  installed_device_count?: number;
+}
+
+export interface AppPinRecord {
+  id: string;
+  device_id?: string | null;
+  device_name?: string | null;
+  app_name: string;
+  pin_type: 'ignore' | 'pin_version';
+  pinned_version?: string | null;
+  reason?: string | null;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
 }
 
 export interface JobRecord {
@@ -232,9 +285,9 @@ export class UpdatesService {
 
     const insertStmt = db.prepare(`
       INSERT INTO device_available_updates (
-        id, device_id, name, current_version, available_version, source,
+        id, device_id, name, current_version, available_version, package_identifier, source,
         is_security, requires_reboot, detected_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `);
 
     for (const u of updates) {
@@ -245,10 +298,22 @@ export class UpdatesService {
         u.name,
         u.currentVersion || null,
         u.availableVersion,
+        u.packageIdentifier || null,
         u.source || 'winget',
         u.isSecurity ? 1 : 0,
         u.requiresReboot ? 1 : 0
       );
+    }
+
+    if (updates.length > 0) {
+      const dev = db.prepare('SELECT name FROM devices WHERE id = ?').get(deviceId) as { name: string } | undefined;
+      NotificationService.notify({
+        type: 'updates_available',
+        deviceId,
+        deviceName: dev?.name || deviceId,
+        details: { updateCount: updates.length, updates },
+        timestamp: new Date().toISOString(),
+      });
     }
   }
 
@@ -268,6 +333,8 @@ export class UpdatesService {
 
   /**
    * Fetch the next pending job for an agent on its 15s check-in cycle
+   * Concurrency limit applies only to heavy jobs: install, uninstall, upgrade, run_script, agent_update.
+   * Light jobs (inventory_scan, check_updates) are NEVER throttled.
    */
   static getNextPendingJob(deviceId: string): JobRecord | null {
     // Ensure only one job runs at a time per device
@@ -280,13 +347,50 @@ export class UpdatesService {
       return null;
     }
 
-    const nextJob = db.prepare(`
+    const candidateJobs = db.prepare(`
       SELECT * FROM update_jobs
       WHERE device_id = ? AND status IN ('queued', 'waiting_for_device')
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
       ORDER BY created_at ASC
-      LIMIT 1
-    `).get(deviceId) as JobRecord | undefined;
+    `).all(deviceId) as unknown as JobRecord[];
+
+    if (!candidateJobs || candidateJobs.length === 0) {
+      return null;
+    }
+
+    let concurrencyLimit = 5;
+    try {
+      const concRow = db.prepare("SELECT value FROM system_settings WHERE key = 'updates_fleet_concurrency'").get() as { value: string } | undefined;
+      if (concRow?.value) {
+        const parsed = parseInt(concRow.value, 10);
+        if (!isNaN(parsed) && parsed > 0) concurrencyLimit = parsed;
+      }
+    } catch {}
+
+    const heavyJobTypes = ['install', 'uninstall', 'upgrade', 'run_script', 'agent_update'];
+
+    // Check fleet-wide running heavy jobs
+    const runningHeavyCountRow = db.prepare(`
+      SELECT COUNT(*) as count FROM update_jobs
+      WHERE status IN ('sent', 'downloading', 'running')
+        AND job_type IN ('install', 'uninstall', 'upgrade', 'run_script', 'agent_update')
+    `).get() as { count: number };
+    const runningHeavyCount = runningHeavyCountRow?.count || 0;
+
+    let nextJob: JobRecord | null = null;
+    for (const job of candidateJobs) {
+      if (!heavyJobTypes.includes(job.job_type)) {
+        // Light job (inventory_scan, check_updates) — proceed immediately
+        nextJob = job;
+        break;
+      } else {
+        // Heavy job — check concurrency limit
+        if (runningHeavyCount < concurrencyLimit) {
+          nextJob = job;
+          break;
+        }
+      }
+    }
 
     if (!nextJob) {
       return null;
@@ -316,12 +420,17 @@ export class UpdatesService {
     rebootRequired?: boolean,
     detectionMatched?: boolean | null
   ): void {
-    const validStatuses = ['sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled'];
+    const validStatuses = ['sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled', 'succeeded_not_detected'];
     if (!validStatuses.includes(status)) {
       throw new Error(`Invalid job status: ${status}`);
     }
 
-    const isTerminal = ['succeeded', 'failed', 'timed_out', 'cancelled'].includes(status);
+    let finalStatus = status;
+    if (status === 'succeeded' && detectionMatched === false) {
+      finalStatus = 'succeeded_not_detected';
+    }
+
+    const isTerminal = ['succeeded', 'failed', 'timed_out', 'cancelled', 'succeeded_not_detected'].includes(finalStatus);
     const truncOut = this.truncateLog(stdout);
     const truncErr = this.truncateLog(stderr);
     const rebootInt = rebootRequired ? 1 : 0;
@@ -332,13 +441,27 @@ export class UpdatesService {
         UPDATE update_jobs
         SET status = ?, exit_code = ?, stdout = ?, stderr = ?, reboot_required = ?, detection_matched = ?, completed_at = CURRENT_TIMESTAMP
         WHERE id = ? AND device_id = ?
-      `).run(status, exitCode !== undefined ? exitCode : null, truncOut, truncErr, rebootInt, matchInt, jobId, deviceId);
+      `).run(finalStatus, exitCode !== undefined ? exitCode : null, truncOut, truncErr, rebootInt, matchInt, jobId, deviceId);
+
+      if (['failed', 'timed_out', 'succeeded_not_detected'].includes(finalStatus)) {
+        const jobRow = db.prepare('SELECT id, job_type, device_id FROM update_jobs WHERE id = ?').get(jobId) as any;
+        const devRow = jobRow ? db.prepare('SELECT name FROM devices WHERE id = ?').get(jobRow.device_id) as any : null;
+        NotificationService.notify({
+          type: finalStatus === 'succeeded_not_detected' ? 'succeeded_not_detected' : (finalStatus === 'timed_out' ? 'job_timed_out' : 'job_failed'),
+          deviceId,
+          deviceName: devRow?.name || deviceId,
+          jobId,
+          jobType: jobRow?.job_type,
+          details: { exitCode, stderr: truncErr, stdout: truncOut },
+          timestamp: new Date().toISOString(),
+        });
+      }
     } else {
       db.prepare(`
         UPDATE update_jobs
         SET status = ?, stdout = COALESCE(?, stdout), stderr = COALESCE(?, stderr), reboot_required = ?
         WHERE id = ? AND device_id = ?
-      `).run(status, truncOut, truncErr, rebootInt, jobId, deviceId);
+      `).run(finalStatus, truncOut, truncErr, rebootInt, jobId, deviceId);
     }
   }
 
@@ -533,26 +656,37 @@ export class UpdatesService {
       WHERE device_id IN (${placeholders})
     `).get(...deviceIds) as { count: number };
 
-    const latestVersion = this.getLatestServerAgentVersion();
-    const agentsWithVer = db.prepare(`
-      SELECT status, last_seen_at, agent_version
-      FROM monitoring_agents
-      WHERE device_id IN (${placeholders})
-    `).all(...deviceIds) as Array<{ status: string; last_seen_at: string | null; agent_version: string | null }>;
+    // 5. Package Library counts & size
+    const pkgRow = db.prepare('SELECT COUNT(*) as count FROM update_packages').get() as { count: number };
+    const pkgSizeRow = db.prepare('SELECT SUM(file_size_bytes) as total_bytes FROM update_package_versions').get() as { total_bytes: number };
 
-    const now = Date.now();
-    const agentsOnline = agentsWithVer.filter(a => a.status === 'online' && a.last_seen_at && (now - new Date(a.last_seen_at).getTime() <= 45000)).length;
-    const agentsOutOfDate = agentsWithVer.filter(a => (a.agent_version || '') !== latestVersion).length;
+    // 6. Detection unavailable count (devices where check_updates failed)
+    const detUnavailRow = db.prepare(`
+      SELECT COUNT(DISTINCT device_id) as count
+      FROM update_jobs
+      WHERE device_id IN (${placeholders})
+        AND job_type = 'check_updates'
+        AND status = 'failed'
+        AND created_at >= datetime('now', '-7 days')
+    `).get(...deviceIds) as { count: number };
+
+    const latestVersion = this.getLatestServerAgentVersion();
+    const agentsData = this.getAgentsList(userId);
+    const agentsWithVer = agentsData.agents;
+    const agentsOutOfDate = agentsWithVer.filter((a: any) => a.isOutdated).length;
+    const agentsOnline = agentsWithVer.filter((a: any) => a.status === 'online').length;
 
     return {
       devicesWithUpdates: updatesRow.count || 0,
       failedJobsLast7Days: failedJobsRow.count || 0,
       devicesPendingReboot: rebootRow.count || 0,
-      detectionUnavailable: 0,
+      detectionUnavailable: detUnavailRow.count || 0,
       agentsOutOfDate,
       totalTrackedSoftware: softwareCountRow.count || 0,
       totalMonitoredAgents: agentsWithVer.length,
       agentsOnline,
+      totalPackages: pkgRow.count || 0,
+      totalPackageLibraryBytes: pkgSizeRow.total_bytes || 0,
       latestServerVersion: latestVersion,
     };
   }
@@ -1137,5 +1271,678 @@ export class UpdatesService {
         WHERE id = ?
       `).run(job.id);
     }
+  }
+
+  /**
+   * ==========================================
+   * PACKAGE LIBRARY & REPOSITORY
+   * ==========================================
+   */
+
+  static getPackageStorageDir(): string {
+    const dir = path.join(config.dataDir, 'update-packages');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return dir;
+  }
+
+  /**
+   * List all packages with version details and fleet installation counts
+   */
+  static getPackagesList(userId: string): PackageRecord[] {
+    const accessibleDevices = DeviceService.getUserDevices(userId);
+    const devIds = accessibleDevices.map(d => d.id);
+    const placeholders = devIds.length > 0 ? devIds.map(() => '?').join(',') : "''";
+
+    const pkgs = (db.prepare(`
+      SELECT p.*
+      FROM update_packages p
+      ORDER BY p.display_name ASC
+    `).all() as unknown) as PackageRecord[];
+
+    for (const pkg of pkgs) {
+      const versions = (db.prepare(`
+        SELECT v.*
+        FROM update_package_versions v
+        WHERE v.package_id = ?
+        ORDER BY v.created_at DESC
+      `).all(pkg.id) as unknown) as PackageVersionRecord[];
+
+      let totalSize = 0;
+      for (const v of versions) {
+        totalSize += v.file_size_bytes || 0;
+        if (devIds.length > 0) {
+          const matchName = v.detection_name || pkg.display_name;
+          const instCountRow = db.prepare(`
+            SELECT COUNT(DISTINCT device_id) as count
+            FROM software_inventory
+            WHERE device_id IN (${placeholders})
+              AND (name LIKE ? OR software_key LIKE ?)
+              ${v.detection_version ? 'AND version = ?' : ''}
+          `).get(...devIds, `%${matchName}%`, `%${matchName}%`, ...(v.detection_version ? [v.detection_version] : [])) as { count: number };
+          v.installed_device_count = instCountRow?.count || 0;
+        } else {
+          v.installed_device_count = 0;
+        }
+      }
+
+      pkg.versions = versions;
+      pkg.total_size_bytes = totalSize;
+      pkg.latest_version = versions.length > 0 ? versions[0].version : undefined;
+
+      if (devIds.length > 0) {
+        const pkgMatch = pkg.display_name;
+        const totalDevsRow = db.prepare(`
+          SELECT COUNT(DISTINCT device_id) as count
+          FROM software_inventory
+          WHERE device_id IN (${placeholders})
+            AND (name LIKE ? OR software_key LIKE ?)
+        `).get(...devIds, `%${pkgMatch}%`, `%${pkgMatch}%`) as { count: number };
+        pkg.installed_device_count = totalDevsRow?.count || 0;
+      } else {
+        pkg.installed_device_count = 0;
+      }
+    }
+
+    return pkgs;
+  }
+
+  /**
+   * Get single package by ID
+   */
+  static getPackageById(packageId: string): PackageRecord | null {
+    const pkg = db.prepare('SELECT * FROM update_packages WHERE id = ?').get(packageId) as PackageRecord | undefined;
+    if (!pkg) return null;
+
+    const versions = (db.prepare(`
+      SELECT * FROM update_package_versions
+      WHERE package_id = ?
+      ORDER BY created_at DESC
+    `).all(packageId) as unknown) as PackageVersionRecord[];
+
+    pkg.versions = versions;
+    pkg.total_size_bytes = versions.reduce((sum, v) => sum + (v.file_size_bytes || 0), 0);
+    pkg.latest_version = versions.length > 0 ? versions[0].version : undefined;
+    return pkg;
+  }
+
+  /**
+   * Create a new package (with optional initial version & file upload)
+   */
+  static createPackage(
+    data: {
+      displayName: string;
+      description?: string;
+      packageSourceType: 'file' | 'winget' | 'apt';
+      wingetId?: string;
+      aptPackageName?: string;
+    },
+    versionData?: {
+      version: string;
+      targetOs: 'windows' | 'linux' | 'all';
+      targetArch: 'amd64' | 'arm64' | 'all';
+      silentInstallArgs?: string;
+      uninstallCommand?: string;
+      expectedExitCodes?: string;
+      detectionName?: string;
+      detectionVersion?: string;
+      notes?: string;
+    },
+    fileBuffer?: Buffer,
+    fileName?: string,
+    userId?: string,
+    username?: string
+  ): PackageRecord {
+    const packageId = crypto.randomUUID();
+    const cleanName = data.displayName.trim();
+    if (!cleanName) throw new Error('Package display name is required');
+
+    db.prepare(`
+      INSERT INTO update_packages (
+        id, display_name, description, package_source_type, winget_id, apt_package_name,
+        created_by_user_id, created_by_username, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(
+      packageId,
+      cleanName,
+      data.description?.trim() || null,
+      data.packageSourceType,
+      data.wingetId?.trim() || null,
+      data.aptPackageName?.trim() || null,
+      userId || null,
+      username || 'System'
+    );
+
+    if (versionData) {
+      this.addPackageVersion(packageId, versionData, fileBuffer, fileName, userId, username);
+    }
+
+    this.logAudit(userId || 'system', username || 'System', 'create_package', undefined, undefined, packageId, {
+      packageId,
+      displayName: cleanName,
+      packageSourceType: data.packageSourceType,
+    });
+
+    return this.getPackageById(packageId)!;
+  }
+
+  /**
+   * Add a version to an existing package
+   */
+  static addPackageVersion(
+    packageId: string,
+    versionData: {
+      version: string;
+      targetOs: 'windows' | 'linux' | 'all';
+      targetArch: 'amd64' | 'arm64' | 'all';
+      silentInstallArgs?: string;
+      uninstallCommand?: string;
+      expectedExitCodes?: string;
+      detectionName?: string;
+      detectionVersion?: string;
+      notes?: string;
+    },
+    fileBuffer?: Buffer,
+    fileName?: string,
+    userId?: string,
+    username?: string
+  ): PackageVersionRecord {
+    const pkg = db.prepare('SELECT * FROM update_packages WHERE id = ?').get(packageId) as PackageRecord | undefined;
+    if (!pkg) throw new Error('Package not found');
+
+    const versionId = crypto.randomUUID();
+    let filePath: string | null = null;
+    let fileSha256: string | null = null;
+    let fileSize = 0;
+
+    let silentArgs = versionData.silentInstallArgs?.trim();
+    let uninstallCmd = versionData.uninstallCommand?.trim();
+    let expectedExitCodes = versionData.expectedExitCodes?.trim() || '0,3010,1641';
+
+    if (fileBuffer && fileName) {
+      const ext = path.extname(fileName).toLowerCase();
+      fileSha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      fileSize = fileBuffer.length;
+
+      const safeBase = `${pkg.id}_${versionData.version.replace(/[^a-zA-Z0-9._-]/g, '_')}_${versionData.targetOs}_${versionData.targetArch}${ext}`;
+      const storageDir = this.getPackageStorageDir();
+      filePath = path.join(storageDir, safeBase);
+      fs.writeFileSync(filePath, fileBuffer);
+
+      // Pre-fill MSI defaults if user didn't specify
+      if (ext === '.msi') {
+        if (!silentArgs) silentArgs = '/qn /norestart';
+        if (!uninstallCmd) uninstallCmd = `msiexec.exe /x "${fileName}" /qn /norestart`;
+      } else if (ext === '.deb') {
+        if (!silentArgs) silentArgs = '';
+        if (!uninstallCmd) uninstallCmd = `apt-get remove -y ${pkg.apt_package_name || pkg.display_name}`;
+      }
+    }
+
+    db.prepare(`
+      INSERT INTO update_package_versions (
+        id, package_id, version, target_os, target_arch, file_path, file_sha256, file_size_bytes,
+        silent_install_args, uninstall_command, expected_exit_codes, detection_name, detection_version,
+        notes, created_by_user_id, created_by_username, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      versionId,
+      packageId,
+      versionData.version.trim(),
+      versionData.targetOs,
+      versionData.targetArch,
+      filePath,
+      fileSha256,
+      fileSize,
+      silentArgs || null,
+      uninstallCmd || null,
+      expectedExitCodes,
+      versionData.detectionName?.trim() || pkg.display_name,
+      versionData.detectionVersion?.trim() || versionData.version.trim(),
+      versionData.notes?.trim() || null,
+      userId || null,
+      username || 'System'
+    );
+
+    db.prepare('UPDATE update_packages SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(packageId);
+
+    this.logAudit(userId || 'system', username || 'System', 'add_package_version', undefined, undefined, packageId, {
+      packageId,
+      versionId,
+      version: versionData.version,
+      fileSize,
+      fileSha256,
+    });
+
+    return (db.prepare('SELECT * FROM update_package_versions WHERE id = ?').get(versionId) as unknown) as PackageVersionRecord;
+  }
+
+  /**
+   * Delete single package version
+   */
+  static deletePackageVersion(versionId: string, userId: string, username: string): void {
+    const ver = db.prepare('SELECT * FROM update_package_versions WHERE id = ?').get(versionId) as PackageVersionRecord | undefined;
+    if (!ver) throw new Error('Package version not found');
+
+    if (ver.file_path && fs.existsSync(ver.file_path)) {
+      try { fs.unlinkSync(ver.file_path); } catch {}
+    }
+
+    db.prepare('DELETE FROM update_package_versions WHERE id = ?').run(versionId);
+    this.logAudit(userId, username, 'delete_package_version', undefined, undefined, ver.package_id, { versionId, version: ver.version });
+  }
+
+  /**
+   * Delete entire package and all its versions
+   */
+  static deletePackage(packageId: string, userId: string, username: string): void {
+    const pkg = db.prepare('SELECT * FROM update_packages WHERE id = ?').get(packageId) as PackageRecord | undefined;
+    if (!pkg) throw new Error('Package not found');
+
+    const versions = db.prepare('SELECT file_path FROM update_package_versions WHERE package_id = ?').all(packageId) as Array<{ file_path: string }>;
+    for (const v of versions) {
+      if (v.file_path && fs.existsSync(v.file_path)) {
+        try { fs.unlinkSync(v.file_path); } catch {}
+      }
+    }
+
+    db.prepare('DELETE FROM update_packages WHERE id = ?').run(packageId);
+    this.logAudit(userId, username, 'delete_package', undefined, undefined, packageId, { packageId, displayName: pkg.display_name });
+  }
+
+  /**
+   * Get physical file path for package version download
+   */
+  static getPackageVersionFile(versionId: string): { filePath: string; fileName: string; sha256: string } | null {
+    const ver = db.prepare('SELECT * FROM update_package_versions WHERE id = ?').get(versionId) as PackageVersionRecord | undefined;
+    if (!ver || !ver.file_path || !fs.existsSync(ver.file_path)) return null;
+
+    const baseName = path.basename(ver.file_path);
+    return {
+      filePath: ver.file_path,
+      fileName: baseName,
+      sha256: ver.file_sha256 || '',
+    };
+  }
+
+  /**
+   * ==========================================
+   * INSTALL / UNINSTALL WORKFLOWS
+   * ==========================================
+   */
+
+  /**
+   * Queue package install across multiple target devices
+   */
+  static queuePackageInstall(
+    packageVersionId: string,
+    deviceIds: string[],
+    customArgs: string | undefined,
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): { queuedCount: number; jobIds: string[] } {
+    const ver = db.prepare('SELECT * FROM update_package_versions WHERE id = ?').get(packageVersionId) as PackageVersionRecord | undefined;
+    if (!ver) throw new Error('Package version not found');
+
+    const pkg = db.prepare('SELECT * FROM update_packages WHERE id = ?').get(ver.package_id) as PackageRecord | undefined;
+    if (!pkg) throw new Error('Package definition not found');
+
+    const jobIds: string[] = [];
+
+    const payload = {
+      package_id: pkg.id,
+      version_id: ver.id,
+      package_name: pkg.display_name,
+      version: ver.version,
+      source_type: pkg.package_source_type,
+      winget_id: pkg.winget_id,
+      apt_package_name: pkg.apt_package_name,
+      download_path: ver.file_path ? `/api/updates/packages/download/${ver.id}` : null,
+      file_sha256: ver.file_sha256,
+      file_size_bytes: ver.file_size_bytes,
+      silent_install_args: customArgs || ver.silent_install_args || '',
+      expected_exit_codes: ver.expected_exit_codes || '0,3010,1641',
+      detection_name: ver.detection_name || pkg.display_name,
+      detection_version: ver.detection_version || ver.version,
+    };
+
+    for (const devId of deviceIds) {
+      try {
+        const jid = this.queueJob(devId, 'install', payload, userId, username, 1800, expiresAt);
+        jobIds.push(jid);
+      } catch (err: any) {
+        console.warn(`[PackageInstall] Skipped device ${devId}:`, err.message);
+      }
+    }
+
+    this.logAudit(userId, username, 'queue_package_install', undefined, undefined, pkg.id, {
+      packageId: pkg.id,
+      versionId: ver.id,
+      packageName: pkg.display_name,
+      version: ver.version,
+      deviceIds,
+      jobIds,
+    });
+
+    return { queuedCount: jobIds.length, jobIds };
+  }
+
+  /**
+   * Queue remote uninstall for an inventory item on a device
+   */
+  static queueUninstall(
+    deviceId: string,
+    inventoryId: string,
+    customCommand: string | undefined,
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): string {
+    const item = db.prepare('SELECT * FROM software_inventory WHERE id = ? AND device_id = ?').get(inventoryId, deviceId) as any;
+    if (!item) throw new Error('Software inventory item not found on this device');
+
+    if (item.is_per_user === 1) {
+      throw new Error('Per-user installs cannot be remotely uninstalled. Remote removal is restricted to machine-wide installs.');
+    }
+
+    let uninstallCmd = customCommand?.trim();
+
+    if (!uninstallCmd) {
+      if (item.quiet_uninstall_string && item.quiet_uninstall_string.trim().length > 0) {
+        uninstallCmd = item.quiet_uninstall_string.trim();
+      } else if (item.msi_product_code) {
+        uninstallCmd = `MsiExec.exe /X${item.msi_product_code} /qn /norestart`;
+      } else if (item.source === 'winget') {
+        uninstallCmd = `winget uninstall --id ${item.name} --exact --scope machine --source winget --accept-source-agreements --disable-interactivity`;
+      } else if (item.source === 'dpkg') {
+        uninstallCmd = `apt-get remove -y ${item.name}`;
+      } else if (item.source === 'snap') {
+        uninstallCmd = `snap remove ${item.name}`;
+      } else if (item.uninstall_string && (item.uninstall_string.includes('/qn') || item.uninstall_string.includes('/quiet') || item.uninstall_string.includes('/S') || item.uninstall_string.includes('/verysilent'))) {
+        uninstallCmd = item.uninstall_string;
+      }
+    }
+
+    if (!uninstallCmd) {
+      throw new Error('No silent uninstall command is known for this application. Please provide a verified custom silent command.');
+    }
+
+    const payload = {
+      inventory_id: item.id,
+      software_key: item.software_key,
+      name: item.name,
+      version: item.version,
+      source: item.source,
+      uninstall_command: uninstallCmd,
+    };
+
+    return this.queueJob(deviceId, 'uninstall', payload, userId, username, 1200, expiresAt);
+  }
+
+  /**
+   * ==========================================
+   * AVAILABLE UPDATES & PINNING
+   * ==========================================
+   */
+
+  /**
+   * Get available updates for user's accessible devices
+   */
+  static getAvailableUpdatesList(userId: string) {
+    const accessibleDevices = DeviceService.getUserDevices(userId);
+    if (accessibleDevices.length === 0) return { updates: [], appGroups: [] };
+
+    const placeholders = accessibleDevices.map(() => '?').join(',');
+    const devMap = new Map(accessibleDevices.map(d => [d.id, d.name]));
+
+    const rows = db.prepare(`
+      SELECT dau.*, d.name as device_name
+      FROM device_available_updates dau
+      JOIN devices d ON d.id = dau.device_id
+      WHERE dau.device_id IN (${placeholders})
+      ORDER BY dau.name ASC, dau.available_version DESC
+    `).all(...accessibleDevices.map(d => d.id)) as any[];
+
+    // Fetch pins for filtering / decorating
+    const pins = db.prepare('SELECT * FROM update_pins').all() as unknown as AppPinRecord[];
+
+    const decorated = rows.map(r => {
+      const globalPin = pins.find(p => p.app_name.toLowerCase() === r.name.toLowerCase() && !p.device_id);
+      const devPin = pins.find(p => p.app_name.toLowerCase() === r.name.toLowerCase() && p.device_id === r.device_id);
+      const activePin = devPin || globalPin || null;
+
+      return {
+        id: r.id,
+        deviceId: r.device_id,
+        deviceName: r.device_name || devMap.get(r.device_id) || 'Unknown',
+        name: r.name,
+        currentVersion: r.current_version,
+        availableVersion: r.available_version,
+        packageIdentifier: r.package_identifier,
+        source: r.source,
+        isSecurity: Boolean(r.is_security),
+        requiresReboot: Boolean(r.requires_reboot),
+        detectedAt: r.detected_at,
+        pin: activePin,
+        isIgnored: activePin?.pin_type === 'ignore' || (activePin?.pin_type === 'pin_version' && activePin.pinned_version === r.current_version),
+      };
+    });
+
+    // Group by App
+    const groupMap = new Map<string, any>();
+    for (const item of decorated) {
+      if (!groupMap.has(item.name)) {
+        groupMap.set(item.name, {
+          name: item.name,
+          packageIdentifier: item.packageIdentifier,
+          availableVersion: item.availableVersion,
+          source: item.source,
+          isSecurity: item.isSecurity,
+          requiresReboot: item.requiresReboot,
+          pin: item.pin,
+          devices: [],
+        });
+      }
+      const g = groupMap.get(item.name);
+      if (item.isSecurity) g.isSecurity = true;
+      if (item.requiresReboot) g.requiresReboot = true;
+      g.devices.push(item);
+    }
+
+    return {
+      updates: decorated,
+      appGroups: Array.from(groupMap.values()),
+    };
+  }
+
+  /**
+   * Queue single app upgrade on device
+   */
+  static queueAppUpgrade(
+    deviceId: string,
+    updateId: string,
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): string {
+    const upd = db.prepare('SELECT * FROM device_available_updates WHERE id = ? AND device_id = ?').get(updateId, deviceId) as any;
+    if (!upd) throw new Error('Available update not found for device');
+
+    const payload = {
+      update_id: upd.id,
+      name: upd.name,
+      current_version: upd.current_version,
+      available_version: upd.available_version,
+      package_identifier: upd.package_identifier,
+      source: upd.source,
+    };
+
+    return this.queueJob(deviceId, 'upgrade', payload, userId, username, 1800, expiresAt);
+  }
+
+  /**
+   * Queue fleet upgrade for an app across all devices where an update is detected
+   */
+  static queueFleetAppUpgrade(
+    appName: string,
+    packageIdentifier?: string,
+    availableVersion?: string,
+    deviceIds?: string[],
+    userId?: string,
+    username?: string,
+    expiresAt?: string | null
+  ): { queuedCount: number; jobIds: string[] } {
+    const accessibleDevices = DeviceService.getUserDevices(userId || 'system');
+    if (accessibleDevices.length === 0) return { queuedCount: 0, jobIds: [] };
+
+    const placeholders = accessibleDevices.map(() => '?').join(',');
+    let query = `
+      SELECT id, device_id, name, current_version, available_version, package_identifier, source
+      FROM device_available_updates
+      WHERE device_id IN (${placeholders}) AND name = ?
+    `;
+    const params: any[] = [...accessibleDevices.map(d => d.id), appName];
+
+    if (deviceIds && deviceIds.length > 0) {
+      const devPlaceholders = deviceIds.map(() => '?').join(',');
+      query += ` AND device_id IN (${devPlaceholders})`;
+      params.push(...deviceIds);
+    }
+
+    const updates = db.prepare(query).all(...params) as any[];
+    const jobIds: string[] = [];
+
+    for (const u of updates) {
+      try {
+        const payload = {
+          update_id: u.id,
+          name: u.name,
+          current_version: u.current_version,
+          available_version: availableVersion || u.available_version,
+          package_identifier: packageIdentifier || u.package_identifier,
+          source: u.source,
+        };
+        const jid = this.queueJob(u.device_id, 'upgrade', payload, userId || 'system', username || 'System', 1800, expiresAt);
+        jobIds.push(jid);
+      } catch (err: any) {
+        console.warn(`[FleetUpgrade] Failed to queue upgrade on device ${u.device_id}:`, err.message);
+      }
+    }
+
+    this.logAudit(userId || 'system', username || 'System', 'fleet_app_upgrade', undefined, undefined, undefined, {
+      appName,
+      packageIdentifier,
+      availableVersion,
+      queuedCount: jobIds.length,
+      jobIds,
+    });
+
+    return { queuedCount: jobIds.length, jobIds };
+  }
+
+  /**
+   * Check for updates on all accessible monitored devices
+   */
+  static checkUpdatesAllDevices(userId: string, username: string): { queuedCount: number } {
+    const accessibleDevices = DeviceService.getUserDevices(userId);
+    let queuedCount = 0;
+
+    for (const d of accessibleDevices) {
+      const agent = db.prepare('SELECT id FROM monitoring_agents WHERE device_id = ?').get(d.id);
+      if (agent) {
+        this.queueJob(d.id, 'check_updates', {}, userId, username, 600);
+        queuedCount++;
+      }
+    }
+
+    this.logAudit(userId, username, 'check_updates_all_devices', undefined, undefined, undefined, { queuedCount });
+    return { queuedCount };
+  }
+
+  /**
+   * Check for updates on a single device
+   */
+  static checkUpdatesSingleDevice(deviceId: string, userId: string, username: string): string {
+    return this.queueJob(deviceId, 'check_updates', {}, userId, username, 600);
+  }
+
+  /**
+   * Get all registered app pins
+   */
+  static getAppPins(userId: string): AppPinRecord[] {
+    const accessibleDevices = DeviceService.getUserDevices(userId);
+    const devMap = new Map(accessibleDevices.map(d => [d.id, d.name]));
+
+    const pins = db.prepare('SELECT * FROM update_pins ORDER BY created_at DESC').all() as any[];
+    return pins.map(p => ({
+      ...p,
+      device_name: p.device_id ? (devMap.get(p.device_id) || 'Unknown Device') : 'Global (All Devices)',
+    }));
+  }
+
+  /**
+   * Set app pin (global or device-specific)
+   */
+  static setAppPin(
+    appName: string,
+    pinType: 'ignore' | 'pin_version',
+    pinnedVersion?: string | null,
+    deviceId?: string | null,
+    reason?: string | null,
+    userId?: string,
+    username?: string
+  ): AppPinRecord {
+    const cleanApp = appName.trim();
+    if (!cleanApp) throw new Error('App name is required');
+
+    // Remove existing pin for this scope
+    if (deviceId) {
+      db.prepare('DELETE FROM update_pins WHERE app_name = ? AND device_id = ?').run(cleanApp, deviceId);
+    } else {
+      db.prepare('DELETE FROM update_pins WHERE app_name = ? AND device_id IS NULL').run(cleanApp);
+    }
+
+    const pinId = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO update_pins (
+        id, device_id, app_name, pin_type, pinned_version, reason,
+        created_by_user_id, created_by_username, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      pinId,
+      deviceId || null,
+      cleanApp,
+      pinType,
+      pinnedVersion || null,
+      reason || null,
+      userId || null,
+      username || 'System'
+    );
+
+    this.logAudit(userId || 'system', username || 'System', 'set_app_pin', deviceId || undefined, undefined, undefined, {
+      pinId,
+      appName: cleanApp,
+      pinType,
+      pinnedVersion,
+      deviceId,
+    });
+
+    return db.prepare('SELECT * FROM update_pins WHERE id = ?').get(pinId) as unknown as AppPinRecord;
+  }
+
+  /**
+   * Delete an app pin
+   */
+  static deleteAppPin(pinId: string, userId: string, username: string): void {
+    const pin = db.prepare('SELECT * FROM update_pins WHERE id = ?').get(pinId) as unknown as AppPinRecord | undefined;
+    if (!pin) throw new Error('Pin not found');
+
+    db.prepare('DELETE FROM update_pins WHERE id = ?').run(pinId);
+    this.logAudit(userId, username, 'delete_app_pin', pin.device_id || undefined, undefined, undefined, {
+      pinId,
+      appName: pin.app_name,
+    });
   }
 }

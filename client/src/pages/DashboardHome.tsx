@@ -20,6 +20,7 @@ export const DashboardHome: React.FC = () => {
   const [monitoredDevices, setMonitoredDevices] = useState<MonitoredDevice[]>([]);
   const [allDevices, setAllDevices] = useState<Device[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [availableUpdates, setAvailableUpdates] = useState<any[]>([]);
 
   useEffect(() => {
     loadDashboard();
@@ -40,15 +41,17 @@ export const DashboardHome: React.FC = () => {
 
     // Load data for widgets
     try {
-      const [monRes, devRes, foldRes] = await Promise.allSettled([
+      const [monRes, devRes, foldRes, updRes] = await Promise.allSettled([
         api.monitoring.getDevices(),
         api.devices.getAll(),
         api.folders.getAll(),
+        api.updates.getAvailableUpdates(),
       ]);
 
       if (monRes.status === 'fulfilled') setMonitoredDevices(monRes.value.devices || []);
       if (devRes.status === 'fulfilled') setAllDevices(devRes.value.devices || []);
       if (foldRes.status === 'fulfilled') setFolders(foldRes.value.folders || []);
+      if (updRes.status === 'fulfilled') setAvailableUpdates(updRes.value.appGroups || []);
     } catch (err) {
       console.error('Failed to load widget data:', err);
     }
@@ -194,6 +197,7 @@ export const DashboardHome: React.FC = () => {
                         {widget.type === 'fleet-health' && <SymbolIcon name="waveform.path.ecg" className="w-4 h-4" />}
                         {widget.type === 'quick-connect' && <SymbolIcon name="macbook.and.iphone" className="w-4 h-4" />}
                         {widget.type === 'system-status' && <SymbolIcon name="server.rack" className="w-4 h-4" />}
+                        {widget.type === 'updates-available' && <SymbolIcon name="arrow.triangle.2.circlepath" className="w-4 h-4" />}
                       </div>
                       <span className="text-xs font-bold text-white">{widget.title}</span>
                     </div>
@@ -382,6 +386,60 @@ export const DashboardHome: React.FC = () => {
                           </div>
                           <span className="text-emerald-400 font-semibold text-[11px]">Active (Port 4822)</span>
                         </div>
+                      </div>
+                    )}
+
+                    {/* 4. Updates Available Widget */}
+                    {widget.type === 'updates-available' && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold px-1">
+                          <span>Pending Updates ({availableUpdates.length} Apps)</span>
+                          <Link to="/updates" className="text-brand-400 hover:text-brand-300 flex items-center gap-1">
+                            <span>Open Updates Tab</span>
+                            <SymbolIcon name="chevron.right" className="w-2.5 h-2.5" />
+                          </Link>
+                        </div>
+
+                        {availableUpdates.length === 0 ? (
+                          <div className="p-4 rounded-2xl bg-surface border border-surface-border text-center space-y-1">
+                            <div className="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto">
+                              <SymbolIcon name="checkmark" className="w-4 h-4" />
+                            </div>
+                            <p className="text-xs font-semibold text-white">All Software Up to Date</p>
+                            <p className="text-[11px] text-slate-400">No pending application updates detected across your fleet.</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {availableUpdates.slice(0, 4).map(grp => (
+                              <div
+                                key={grp.name}
+                                className="p-3 rounded-2xl bg-surface border border-surface-border flex items-center justify-between text-xs"
+                              >
+                                <div className="min-w-0 pr-2">
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-semibold text-white truncate">{grp.name}</p>
+                                    {grp.isSecurity && (
+                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-danger/20 text-danger">SECURITY</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                                    <span>Target: <strong className="text-slate-200 font-mono">{grp.availableVersion}</strong></span>
+                                    <span>•</span>
+                                    <span>{grp.devices?.length || 0} device(s)</span>
+                                  </div>
+                                </div>
+
+                                <Link
+                                  to="/updates"
+                                  className="px-3 py-1.5 rounded-xl bg-brand-600/80 hover:bg-brand-600 text-white text-[11px] font-semibold flex items-center gap-1 shadow-sm transition-all"
+                                >
+                                  <span>Review</span>
+                                  <SymbolIcon name="arrow.right" className="w-2.5 h-2.5" />
+                                </Link>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

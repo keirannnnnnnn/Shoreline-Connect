@@ -45,6 +45,7 @@ export interface DeviceRecord {
   updated_at: string;
   is_shared?: boolean;
   shared_by_user?: string;
+  tags?: string[];
 }
 
 export interface FolderRecord {
@@ -93,8 +94,24 @@ export class DeviceService {
 
     const owned = (ownedStmt.all(userId) as unknown) as DeviceRecord[];
     const shared = (sharedStmt.all(userId) as unknown) as DeviceRecord[];
+    const allDevs = [...owned, ...shared];
 
-    return [...owned, ...shared];
+    if (allDevs.length > 0) {
+      try {
+        const placeholders = allDevs.map(() => '?').join(',');
+        const tagRows = db.prepare(`SELECT device_id, tag FROM device_tags WHERE device_id IN (${placeholders}) ORDER BY tag ASC`).all(...allDevs.map(d => d.id)) as Array<{ device_id: string; tag: string }>;
+        const tagMap = new Map<string, string[]>();
+        for (const tr of tagRows) {
+          if (!tagMap.has(tr.device_id)) tagMap.set(tr.device_id, []);
+          tagMap.get(tr.device_id)!.push(tr.tag);
+        }
+        for (const dev of allDevs) {
+          dev.tags = tagMap.get(dev.id) || [];
+        }
+      } catch {}
+    }
+
+    return allDevs;
   }
 
   /**
@@ -388,5 +405,44 @@ export class DeviceService {
     db.prepare('UPDATE devices SET folder_id = NULL WHERE folder_id = ?').run(folderId);
     db.prepare('DELETE FROM folders WHERE id = ?').run(folderId);
     return true;
+  }
+
+  /**
+   * Get tags for a specific device
+   */
+  static getDeviceTags(deviceId: string): string[] {
+    const rows = db.prepare('SELECT tag FROM device_tags WHERE device_id = ? ORDER BY tag ASC').all(deviceId) as Array<{ tag: string }>;
+    return rows.map(r => r.tag);
+  }
+
+  /**
+   * Update tags for a device
+   */
+  static setDeviceTags(deviceId: string, tags: string[], userId: string): string[] {
+    const dev = this.getDeviceForUser(deviceId, userId);
+    if (!dev) throw new Error('Device not found or unauthorized');
+
+    db.prepare('DELETE FROM device_tags WHERE device_id = ?').run(deviceId);
+    const insert = db.prepare('INSERT OR IGNORE INTO device_tags (id, device_id, tag) VALUES (?, ?, ?)');
+    const cleanTags = Array.from(new Set(tags.map(t => t.trim()).filter(t => t.length > 0)));
+    for (const t of cleanTags) {
+      insert.run(uuidv4(), deviceId, t);
+    }
+    return cleanTags;
+  }
+
+  /**
+   * Get all distinct tags across user's accessible devices
+   */
+  static getAllTags(userId: string): string[] {
+    const userDevs = this.getUserDevices(userId);
+    if (userDevs.length === 0) return [];
+    const placeholders = userDevs.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT DISTINCT tag FROM device_tags
+      WHERE device_id IN (${placeholders})
+      ORDER BY tag ASC
+    `).all(...userDevs.map(d => d.id)) as Array<{ tag: string }>;
+    return rows.map(r => r.tag);
   }
 }
