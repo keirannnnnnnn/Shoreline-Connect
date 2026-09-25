@@ -111,8 +111,8 @@ export class AuthService {
       let canAccess = false;
 
       if (!configuredGroup) {
-        // If no specific group is configured for this tab, all authenticated users have access
-        canAccess = true;
+        // Updates tab fails closed if blank; other tabs default to open for authenticated users
+        canAccess = tab === 'updates' ? false : true;
       } else {
         const requiredGroups = configuredGroup.split(/[,;]/).map(s => s.trim()).filter(Boolean);
         canAccess = isGlobalAdmin || userGroups.some(g =>

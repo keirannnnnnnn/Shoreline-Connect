@@ -690,6 +690,113 @@ async function runTests() {
 
   console.log('  ✅ Updates inventory discovery, version diffing, job queue & command channel verified.\n');
 
+  // 15f: Fail-Closed Tab Permission Check for Updates
+  db.prepare("UPDATE system_settings SET value = '' WHERE key = 'tab_group_updates'").run();
+  const permsBlankUpdates = AuthService.getUserPermissions(untrackedUserId);
+  assert.strictEqual(permsBlankUpdates.tabs.updates.canAccess, false, 'Blank updates tab group must FAIL CLOSED (nobody has access)');
+
+  // 15g: Script Library Subsystem (CRUD, Versioning & Deployment)
+  console.log('▶ Test 15g: Script Library Subsystem (CRUD, Versioning & Deployment)');
+  const script1 = UpdatesService.createScript(
+    'Defender Onboarding Test',
+    'Deploy Microsoft Defender for Endpoint',
+    'windows',
+    'powershell',
+    'param([string]$OrgId)\nWrite-Output "Onboarding to $OrgId..."',
+    300,
+    JSON.stringify([{ name: 'OrgId', label: 'Organization ID', type: 'string', required: true, default: 'SHORELINE-01' }]),
+    'Initial commit',
+    adminId,
+    'keiran.griffiths'
+  );
+  assert(script1.id, 'Must create script');
+
+  // Update script version
+  const scriptV2 = UpdatesService.updateScript(
+    script1.id,
+    'Defender Onboarding Test',
+    'Deploy Microsoft Defender for Endpoint',
+    'windows',
+    'powershell',
+    300,
+    JSON.stringify([{ name: 'OrgId', label: 'Organization ID', type: 'string', required: true, default: 'SHORELINE-01' }]),
+    'param([string]$OrgId)\nWrite-Output "V2 Onboarding to $OrgId..."',
+    'Updated onboarding command',
+    adminId,
+    'keiran.griffiths'
+  );
+  assert.strictEqual(scriptV2.id, script1.id, 'Must update same script');
+
+  // Retrieve script with versions
+  const fullScript = UpdatesService.getScriptById(script1.id, adminId);
+  assert(fullScript, 'Must retrieve script by ID');
+  assert.strictEqual(fullScript.versions.length, 2, 'Script must have 2 versions in history');
+
+  // Deploy script to device with parameter values
+  const deployResult = UpdatesService.deployScript(
+    script1.id,
+    undefined,
+    [testUpdateDevId],
+    { OrgId: 'CORP-TENANT-999' },
+    adminId,
+    'keiran.griffiths'
+  );
+  assert.strictEqual(deployResult.jobIds.length, 1, 'Must queue 1 deploy job');
+
+  // Verify queued job contains script payload and injected parameters
+  const deployedJob = UpdatesService.getJobs(adminId).find(j => j.id === deployResult.jobIds[0]);
+  assert(deployedJob, 'Job must exist in jobs list');
+  assert.strictEqual(deployedJob.job_type, 'run_script', 'Job type must be run_script');
+  const jobPayload = JSON.parse(deployedJob.payload_json);
+  assert.strictEqual(jobPayload.script_type, 'powershell', 'Script type must match');
+  assert.strictEqual(jobPayload.parameters.OrgId, 'CORP-TENANT-999', 'Parameter value must match');
+  assert(jobPayload.script_content.includes('V2 Onboarding'), 'Job must carry latest script content');
+
+  // 15h: Agent Builds & Default Promotion
+  console.log('▶ Test 15h: Agent Builds Management & Install Default');
+  const build1 = UpdatesService.saveAgentBuild(
+    '1.1.0-test',
+    'windows',
+    'amd64',
+    Buffer.from('MOCK_BINARY_BYTES_FOR_AGENT_UPDATE_TEST'),
+    'Test Windows agent build',
+    adminId,
+    'keiran.griffiths'
+  );
+  assert(build1.id, 'Must create agent build record');
+  assert.strictEqual(build1.is_install_default, 0, 'New build should not be install default yet');
+
+  // Promote to install default
+  UpdatesService.setInstallDefaultAgentBuild(build1.id, adminId, 'keiran.griffiths');
+  const buildsList = UpdatesService.getAgentBuilds(adminId);
+  const promotedBuild = buildsList.find(b => b.id === build1.id);
+  assert(promotedBuild && promotedBuild.is_install_default === 1, 'Build must be promoted to install default');
+
+  // 15i: Offline Device 'waiting_for_device' Queueing & Bulk Cancel
+  console.log('▶ Test 15i: Offline Device Queueing & Bulk Cancellation');
+  // Device has no recent check-in, so queueJob should assign 'waiting_for_device'
+  const offlineJobId = UpdatesService.queueJob(
+    testUpdateDevId,
+    'inventory_scan',
+    {},
+    adminId,
+    'keiran.griffiths'
+  );
+  const offlineJob = UpdatesService.getJobs(adminId).find(j => j.id === offlineJobId);
+  assert(offlineJob, 'Offline job must exist');
+  assert.strictEqual(offlineJob.status, 'waiting_for_device', 'Offline device job must be queued with status waiting_for_device');
+
+  // Cancel bulk jobs
+  const cancelResult = UpdatesService.cancelJobsBulk([offlineJobId, deployResult.jobIds[0]], adminId, 'keiran.griffiths');
+  assert.strictEqual(cancelResult.cancelledCount, 2, 'Must cancel 2 jobs');
+  const cancelledJobCheck = UpdatesService.getJobs(adminId).find(j => j.id === offlineJobId);
+  assert.strictEqual(cancelledJobCheck?.status, 'cancelled', 'Job status must be cancelled');
+
+  // Clean up script and build
+  UpdatesService.deleteScript(script1.id, adminId, 'keiran.griffiths');
+  UpdatesService.deleteAgentBuild(build1.id, adminId, 'keiran.griffiths');
+  console.log('  ✅ Script Library CRUD, versioning, deployment, agent builds, and offline queueing verified.\n');
+
   // Cleanup test mutations from DB so live system remains untouched
   db.prepare("DELETE FROM users WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM devices WHERE id LIKE '%test%'").run();
@@ -698,6 +805,8 @@ async function runTests() {
   db.prepare("DELETE FROM cloud_shares WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM cloud_quick_link_audit WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM update_jobs WHERE device_id LIKE '%test%'").run();
+  db.prepare("DELETE FROM update_scripts WHERE id LIKE 'test-%'").run();
+  db.prepare("DELETE FROM update_agent_builds WHERE id LIKE 'test-%'").run();
   db.prepare("DELETE FROM software_inventory WHERE device_id LIKE '%test%'").run();
   db.prepare("DELETE FROM software_inventory_history WHERE device_id LIKE '%test%'").run();
   db.prepare("UPDATE system_settings SET value = '' WHERE key IN ('tab_group_devices', 'tab_group_monitoring', 'tab_group_tracking', 'tab_group_cloud', 'tab_group_updates')").run();

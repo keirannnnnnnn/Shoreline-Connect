@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"shoreline-agent/collector"
@@ -185,13 +187,141 @@ func (r *JobRunner) runJob(job collector.JobPayload) {
 	case "agent_update":
 		r.handleAgentSelfUpdate(job)
 
+	case "run_script":
+		r.handleRunScript(job)
+
 	default:
 		ec := 1
 		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Unknown or unsupported job type: %s", job.JobType), false, nil)
 	}
 }
 
-// Self-update agent binary with automatic rollback watchdog
+// Execute saved script under SYSTEM / root with environment variables
+func (r *JobRunner) handleRunScript(job collector.JobPayload) {
+	var payload struct {
+		ScriptID      string            `json:"script_id"`
+		ScriptName    string            `json:"script_name"`
+		ScriptType    string            `json:"script_type"` // 'powershell', 'batch', 'bash'
+		TargetOS      string            `json:"target_os"`
+		ScriptContent string            `json:"script_content"`
+		Parameters    map[string]string `json:"parameters"`
+	}
+
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to parse script payload JSON: %v", err), false, nil)
+		return
+	}
+
+	if payload.ScriptContent == "" {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", "Script content is empty", false, nil)
+		return
+	}
+
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+
+	// Secure SYSTEM/root scripts directory
+	var scriptsDir string
+	if runtime.GOOS == "windows" {
+		scriptsDir = filepath.Join(exeDir, "scripts")
+		_ = os.MkdirAll(scriptsDir, 0700)
+	} else {
+		scriptsDir = "/root/.shoreline-agent/scripts"
+		_ = os.MkdirAll(scriptsDir, 0700)
+	}
+
+	var ext string
+	switch payload.ScriptType {
+	case "powershell":
+		ext = ".ps1"
+	case "batch":
+		ext = ".cmd"
+	case "bash":
+		ext = ".sh"
+	default:
+		if runtime.GOOS == "windows" {
+			ext = ".ps1"
+		} else {
+			ext = ".sh"
+		}
+	}
+
+	scriptFile := filepath.Join(scriptsDir, fmt.Sprintf("sh_job_%s%s", job.ID, ext))
+	if err := os.WriteFile(scriptFile, []byte(payload.ScriptContent), 0700); err != nil {
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Failed to write secure script file: %v", err), false, nil)
+		return
+	}
+	defer os.Remove(scriptFile) // Immediate secure cleanup
+
+	// Prepare execution command
+	timeout := time.Duration(job.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		if payload.ScriptType == "batch" || ext == ".cmd" {
+			cmd = exec.CommandContext(ctx, "cmd.exe", "/c", scriptFile)
+		} else {
+			cmd = exec.CommandContext(ctx, "powershell.exe", "-NonInteractive", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile)
+		}
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/bash", scriptFile)
+	}
+
+	// Pass parameters strictly as environment variables (no text substitution)
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("SH_JOB_ID=%s", job.ID))
+	env = append(env, fmt.Sprintf("SH_SCRIPT_NAME=%s", payload.ScriptName))
+	for k, v := range payload.Parameters {
+		cleanKey := strings.ToUpper(strings.ReplaceAll(k, " ", "_"))
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+		env = append(env, fmt.Sprintf("SH_PARAM_%s=%s", cleanKey, v))
+	}
+	cmd.Env = env
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	log.Printf("[JobRunner] Executing script job %s (%s, type=%s)", job.ID, payload.ScriptName, payload.ScriptType)
+	runErr := cmd.Run()
+
+	stdoutStr := stdoutBuf.String()
+	stderrStr := stderrBuf.String()
+
+	var exitCode int
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+			if stderrStr == "" {
+				stderrStr = runErr.Error()
+			}
+		}
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		ec := 124
+		r.ReportStatus(job.ID, "timed_out", &ec, stdoutStr, fmt.Sprintf("Script execution timed out after %v\n%s", timeout, stderrStr), false, nil)
+		return
+	}
+
+	if exitCode == 0 {
+		r.ReportStatus(job.ID, "succeeded", &exitCode, stdoutStr, stderrStr, false, nil)
+	} else {
+		r.ReportStatus(job.ID, "failed", &exitCode, stdoutStr, stderrStr, false, nil)
+	}
+}
+
+// Self-update agent binary with external continuous health supervisor
 func (r *JobRunner) handleAgentSelfUpdate(job collector.JobPayload) {
 	log.Printf("[JobRunner] Initiating agent self-update...")
 	r.ReportStatus(job.ID, "downloading", nil, "Downloading new agent binary...", "", false, nil)
@@ -203,13 +333,26 @@ func (r *JobRunner) handleAgentSelfUpdate(job collector.JobPayload) {
 		return
 	}
 	exePath, _ = filepath.Abs(exePath)
+	exeDir := filepath.Dir(exePath)
 
-	binName := fmt.Sprintf("shoreline-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		binName += ".exe"
+	var payload struct {
+		BuildID      string `json:"build_id"`
+		Version      string `json:"version"`
+		SHA256       string `json:"sha256"`
+		DownloadPath string `json:"download_path"`
 	}
+	_ = json.Unmarshal([]byte(job.PayloadJSON), &payload)
 
-	downloadURL := fmt.Sprintf("%s/api/updates/agent/download/%s", r.hubURL, binName)
+	var downloadURL string
+	if payload.DownloadPath != "" {
+		downloadURL = fmt.Sprintf("%s%s", r.hubURL, payload.DownloadPath)
+	} else {
+		binName := fmt.Sprintf("shoreline-agent-%s-%s", runtime.GOOS, runtime.GOARCH)
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+		downloadURL = fmt.Sprintf("%s/api/updates/agent/download/%s", r.hubURL, binName)
+	}
 
 	req, err := http.NewRequest("GET", downloadURL, nil)
 	if err != nil {
@@ -229,6 +372,7 @@ func (r *JobRunner) handleAgentSelfUpdate(job collector.JobPayload) {
 
 	tempPath := exePath + ".new"
 	bakPath := exePath + ".bak"
+	markerPath := filepath.Join(exeDir, ".healthy")
 
 	tmpFile, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
@@ -252,7 +396,18 @@ func (r *JobRunner) handleAgentSelfUpdate(job collector.JobPayload) {
 	calcHash := hex.EncodeToString(hasher.Sum(nil))
 	log.Printf("[JobRunner] Downloaded agent binary SHA-256: %s", calcHash)
 
+	// Validate expected hash if provided
+	if payload.SHA256 != "" && !strings.EqualFold(calcHash, payload.SHA256) {
+		os.Remove(tempPath)
+		ec := 1
+		r.ReportStatus(job.ID, "failed", &ec, "", fmt.Sprintf("Checksum verification failed: expected %s, got %s", payload.SHA256, calcHash), false, nil)
+		return
+	}
+
+	// Remove any existing .healthy marker before restart
+	_ = os.Remove(markerPath)
 	_ = os.Remove(bakPath)
+
 	if err := os.Rename(exePath, bakPath); err != nil {
 		os.Remove(tempPath)
 		ec := 1
@@ -268,16 +423,55 @@ func (r *JobRunner) handleAgentSelfUpdate(job collector.JobPayload) {
 	}
 
 	ec := 0
-	r.ReportStatus(job.ID, "succeeded", &ec, "Agent binary swapped successfully. Restarting service...", "", false, nil)
-	log.Printf("[JobRunner] Agent binary updated. Triggering restart...")
+	r.ReportStatus(job.ID, "succeeded", &ec, "Agent binary swapped successfully. Triggering supervised service restart...", "", false, nil)
+	log.Printf("[JobRunner] Agent binary updated. Launching supervisor & restarting...")
 
-	// Restart service safely
+	// Launch supervisor & restart service safely
 	go func() {
 		time.Sleep(1 * time.Second)
 		if runtime.GOOS == "windows" {
-			_ = exec.Command("powershell.exe", "-Command", "Restart-Service ShorelineAgent -Force").Start()
+			// PowerShell supervisor: checks continuous service health & .healthy marker over 60s window
+			script := fmt.Sprintf(`& {
+				Start-Sleep -Seconds 3
+				Restart-Service ShorelineAgent -Force -ErrorAction SilentlyContinue
+				$healthy = $false
+				$marker = '%s'
+				for ($i = 0; $i -lt 12; $i++) {
+					Start-Sleep -Seconds 5
+					if (Test-Path $marker) { $healthy = $true; break }
+					$svc = Get-Service ShorelineAgent -ErrorAction SilentlyContinue
+					if (-not $svc -or $svc.Status -ne 'Running') { break }
+				}
+				if (-not $healthy -and (Test-Path '%s')) {
+					Write-Output 'Rollback triggered by supervisor.'
+					Stop-Service ShorelineAgent -Force -ErrorAction SilentlyContinue
+					Copy-Item '%s' '%s' -Force
+					Start-Service ShorelineAgent -ErrorAction SilentlyContinue
+				}
+			}`, markerPath, bakPath, bakPath, exePath)
+
+			_ = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script).Start()
 		} else {
-			_ = exec.Command("systemctl", "restart", "shoreline-agent").Start()
+			// Linux: launch via systemd-run outside service cgroup so systemd doesn't terminate it
+			supervisorCmd := fmt.Sprintf(`sleep 3
+systemctl restart shoreline-agent || true
+healthy=0
+for i in {1..12}; do
+    sleep 5
+    if [ -f "%s" ] || [ -f "/etc/shoreline-agent/.healthy" ]; then
+        healthy=1
+        break
+    fi
+    if ! systemctl is-active --quiet shoreline-agent; then
+        break
+    fi
+done
+if [ $healthy -eq 0 ] && [ -f "%s" ]; then
+    cp -f "%s" "%s"
+    systemctl restart shoreline-agent
+fi`, markerPath, bakPath, bakPath, exePath)
+
+			_ = exec.Command("systemd-run", "--unit=shoreline-agent-supervisor-"+fmt.Sprint(time.Now().Unix()), "--no-block", "bash", "-c", supervisorCmd).Start()
 		}
 	}()
 }

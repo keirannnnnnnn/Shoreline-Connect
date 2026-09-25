@@ -42,7 +42,7 @@ export interface JobRecord {
   reboot_required?: number;
   detection_matched?: number | null;
   timeout_seconds: number;
-  expires_at: string;
+  expires_at?: string | null;
   created_by_user_id?: string | null;
   created_by_username: string;
   created_at: string;
@@ -50,8 +50,51 @@ export interface JobRecord {
   completed_at?: string | null;
 }
 
+export interface ScriptRecord {
+  id: string;
+  name: string;
+  description?: string | null;
+  target_os: 'windows' | 'linux' | 'all';
+  script_type: 'powershell' | 'batch' | 'bash';
+  timeout_seconds: number;
+  parameters_schema_json?: string | null;
+  is_archived?: number;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
+  updated_at: string;
+  latest_version?: number;
+  script_content?: string;
+}
+
+export interface AgentBuildRecord {
+  id: string;
+  version: string;
+  target_os: 'windows' | 'linux';
+  target_arch: 'amd64' | 'arm64';
+  file_path: string;
+  file_sha256: string;
+  file_size_bytes: number;
+  is_install_default: number;
+  notes?: string | null;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
+}
+
 export class UpdatesService {
   private static MAX_LOG_BYTES = 65536; // 64KB log limit
+
+  /**
+   * Get agent binaries storage directory
+   */
+  static getAgentBinariesDir(): string {
+    const dir = path.join(config.dataDir, 'agent-binaries');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return dir;
+  }
 
   /**
    * Truncate string to maximum length safely
@@ -210,6 +253,20 @@ export class UpdatesService {
   }
 
   /**
+   * Check if device is currently online (last seen within 45s)
+   */
+  static isDeviceOnline(deviceId: string): boolean {
+    const agent = db.prepare('SELECT status, last_seen_at FROM monitoring_agents WHERE device_id = ?').get(deviceId) as {
+      status: string;
+      last_seen_at: string | null;
+    } | undefined;
+
+    if (!agent || agent.status !== 'online' || !agent.last_seen_at) return false;
+    const diffMs = Date.now() - new Date(agent.last_seen_at).getTime();
+    return diffMs <= 45000;
+  }
+
+  /**
    * Fetch the next pending job for an agent on its 15s check-in cycle
    */
   static getNextPendingJob(deviceId: string): JobRecord | null {
@@ -225,7 +282,8 @@ export class UpdatesService {
 
     const nextJob = db.prepare(`
       SELECT * FROM update_jobs
-      WHERE device_id = ? AND status = 'queued' AND expires_at > CURRENT_TIMESTAMP
+      WHERE device_id = ? AND status IN ('queued', 'waiting_for_device')
+        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
       ORDER BY created_at ASC
       LIMIT 1
     `).get(deviceId) as JobRecord | undefined;
@@ -285,7 +343,7 @@ export class UpdatesService {
   }
 
   /**
-   * Queue a new update job
+   * Queue a new update job with offline 'waiting_for_device' state and optional expiry
    */
   static queueJob(
     deviceId: string,
@@ -293,7 +351,8 @@ export class UpdatesService {
     payload: any,
     userId: string,
     username: string,
-    timeoutSeconds: number = 1800
+    timeoutSeconds: number = 1800,
+    expiresAt?: string | null
   ): string {
     const validTypes = ['inventory_scan', 'check_updates', 'install', 'uninstall', 'upgrade', 'agent_update', 'run_script'];
     if (!validTypes.includes(jobType)) {
@@ -306,19 +365,21 @@ export class UpdatesService {
     }
 
     const jobId = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const isOnline = this.isDeviceOnline(deviceId);
+    const initialStatus = isOnline ? 'queued' : 'waiting_for_device';
 
     db.prepare(`
       INSERT INTO update_jobs (
         id, device_id, job_type, status, payload_json, timeout_seconds, expires_at,
         created_by_user_id, created_by_username, created_at
-      ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(jobId, deviceId, jobType, JSON.stringify(payload || {}), timeoutSeconds, expiresAt, userId, username);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(jobId, deviceId, jobType, initialStatus, JSON.stringify(payload || {}), timeoutSeconds, expiresAt || null, userId, username);
 
     // Audit log
     this.logAudit(userId, username, `queue_job_${jobType}`, deviceId, deviceData.device.name, undefined, {
       jobId,
       jobType,
+      initialStatus,
       payload,
     });
 
@@ -326,7 +387,27 @@ export class UpdatesService {
   }
 
   /**
-   * Cancel a queued job
+   * Rescan all online/available devices for software inventory
+   */
+  static rescanAllDevices(userId: string, username: string): { queuedCount: number } {
+    const accessibleDevices = DeviceService.getUserDevices(userId);
+    let queuedCount = 0;
+
+    for (const d of accessibleDevices) {
+      // Check if monitoring is enabled on device
+      const agent = db.prepare('SELECT id FROM monitoring_agents WHERE device_id = ?').get(d.id);
+      if (agent) {
+        this.queueJob(d.id, 'inventory_scan', {}, userId, username, 600);
+        queuedCount++;
+      }
+    }
+
+    this.logAudit(userId, username, 'rescan_all_devices', undefined, undefined, undefined, { queuedCount });
+    return { queuedCount };
+  }
+
+  /**
+   * Cancel a queued or waiting job
    */
   static cancelJob(jobId: string, userId: string, username: string, isAdmin: boolean): void {
     const job = db.prepare('SELECT * FROM update_jobs WHERE id = ?').get(jobId) as JobRecord | undefined;
@@ -343,7 +424,7 @@ export class UpdatesService {
       throw new Error('Only the creator or an administrator can cancel this job');
     }
 
-    if (job.status !== 'queued') {
+    if (job.status !== 'queued' && job.status !== 'waiting_for_device') {
       throw new Error(`Cannot cancel job in '${job.status}' status`);
     }
 
@@ -354,6 +435,20 @@ export class UpdatesService {
     `).run(jobId);
 
     this.logAudit(userId, username, 'cancel_job', job.device_id, deviceData.device.name, undefined, { jobId });
+  }
+
+  /**
+   * Bulk cancel jobs in queued or waiting_for_device status
+   */
+  static cancelJobsBulk(jobIds: string[], userId: string, username: string, isAdmin: boolean): { cancelledCount: number } {
+    let cancelledCount = 0;
+    for (const jid of jobIds) {
+      try {
+        this.cancelJob(jid, userId, username, isAdmin);
+        cancelledCount++;
+      } catch {}
+    }
+    return { cancelledCount };
   }
 
   /**
@@ -399,6 +494,8 @@ export class UpdatesService {
         detectionUnavailable: 0,
         agentsOutOfDate: 0,
         totalTrackedSoftware: 0,
+        totalMonitoredAgents: 0,
+        agentsOnline: 0,
       };
     }
 
@@ -420,7 +517,7 @@ export class UpdatesService {
         AND created_at >= datetime('now', '-7 days')
     `).get(...deviceIds) as { count: number };
 
-    // 3. Devices pending reboot (from latest jobs or monitoring flags)
+    // 3. Devices pending reboot
     const rebootRow = db.prepare(`
       SELECT COUNT(DISTINCT device_id) as count
       FROM update_jobs
@@ -436,6 +533,16 @@ export class UpdatesService {
       WHERE device_id IN (${placeholders})
     `).get(...deviceIds) as { count: number };
 
+    // 5. Total agents & online count
+    const agents = db.prepare(`
+      SELECT status, last_seen_at
+      FROM monitoring_agents
+      WHERE device_id IN (${placeholders})
+    `).all(...deviceIds) as Array<{ status: string; last_seen_at: string | null }>;
+
+    const now = Date.now();
+    const agentsOnline = agents.filter(a => a.status === 'online' && a.last_seen_at && (now - new Date(a.last_seen_at).getTime() <= 45000)).length;
+
     return {
       devicesWithUpdates: updatesRow.count || 0,
       failedJobsLast7Days: failedJobsRow.count || 0,
@@ -443,6 +550,8 @@ export class UpdatesService {
       detectionUnavailable: 0,
       agentsOutOfDate: 0,
       totalTrackedSoftware: softwareCountRow.count || 0,
+      totalMonitoredAgents: agents.length,
+      agentsOnline,
     };
   }
 
@@ -529,6 +638,400 @@ export class UpdatesService {
   }
 
   /**
+   * Get full Agents list with platform, version drift, and online state
+   */
+  static getAgentsList(userId: string) {
+    const accessibleDevices = DeviceService.getUserDevices(userId);
+    if (accessibleDevices.length === 0) return [];
+
+    const agentsList: any[] = [];
+    const now = Date.now();
+
+    for (const d of accessibleDevices) {
+      const agent = db.prepare(`
+        SELECT id, status, last_seen_at, agent_version, system_info
+        FROM monitoring_agents
+        WHERE device_id = ?
+      `).get(d.id) as any | undefined;
+
+      if (!agent) continue;
+
+      let effectiveStatus = agent.status;
+      if (agent.status === 'online' && agent.last_seen_at) {
+        const lastSeenMs = new Date(agent.last_seen_at).getTime();
+        if (now - lastSeenMs > 45000) {
+          effectiveStatus = 'offline';
+        }
+      }
+
+      let parsedSysInfo = null;
+      if (agent.system_info) {
+        try {
+          parsedSysInfo = JSON.parse(agent.system_info);
+        } catch {}
+      }
+
+      // Check for active / waiting jobs
+      const activeJob = db.prepare(`
+        SELECT id, job_type, status, created_at
+        FROM update_jobs
+        WHERE device_id = ? AND status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `).get(d.id);
+
+      agentsList.push({
+        deviceId: d.id,
+        deviceName: d.name,
+        host: d.host,
+        protocol: d.protocol,
+        agentId: agent.id,
+        agentVersion: agent.agent_version || '1.0.0',
+        status: effectiveStatus,
+        lastSeenAt: agent.last_seen_at,
+        platform: parsedSysInfo ? `${parsedSysInfo.os || 'unknown'} (${parsedSysInfo.arch || 'unknown'})` : 'unknown',
+        os: parsedSysInfo?.os || 'windows',
+        arch: parsedSysInfo?.arch || 'amd64',
+        cpuModel: parsedSysInfo?.cpu_model || null,
+        cpuCores: parsedSysInfo?.cpu_cores || null,
+        activeJob,
+      });
+    }
+
+    return agentsList;
+  }
+
+  /**
+   * Get all registered agent builds
+   */
+  static getAgentBuilds(): AgentBuildRecord[] {
+    return (db.prepare('SELECT * FROM update_agent_builds ORDER BY created_at DESC').all() as unknown) as AgentBuildRecord[];
+  }
+
+  /**
+   * Save uploaded agent binary build
+   */
+  static saveAgentBuild(
+    version: string,
+    targetOs: 'windows' | 'linux',
+    targetArch: 'amd64' | 'arm64',
+    buffer: Buffer,
+    notes: string | undefined,
+    userId: string,
+    username: string
+  ): AgentBuildRecord {
+    const id = crypto.randomUUID();
+    const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+    const filename = `shoreline-agent-${version}-${targetOs}-${targetArch}${targetOs === 'windows' ? '.exe' : ''}`;
+    const storageDir = this.getAgentBinariesDir();
+    const targetPath = path.join(storageDir, filename);
+
+    fs.writeFileSync(targetPath, buffer);
+
+    db.prepare(`
+      INSERT INTO update_agent_builds (
+        id, version, target_os, target_arch, file_path, file_sha256, file_size_bytes,
+        is_install_default, notes, created_by_user_id, created_by_username, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(id, version, targetOs, targetArch, targetPath, sha256, buffer.length, notes || null, userId, username);
+
+    this.logAudit(userId, username, 'upload_agent_build', undefined, undefined, undefined, {
+      buildId: id,
+      version,
+      targetOs,
+      targetArch,
+      sha256,
+      sizeBytes: buffer.length,
+    });
+
+    return (db.prepare('SELECT * FROM update_agent_builds WHERE id = ?').get(id) as unknown) as AgentBuildRecord;
+  }
+
+  /**
+   * Set an agent build as the install default for its OS and arch
+   */
+  static setInstallDefaultAgentBuild(buildId: string, userId: string, username: string): void {
+    const build = db.prepare('SELECT * FROM update_agent_builds WHERE id = ?').get(buildId) as AgentBuildRecord | undefined;
+    if (!build) throw new Error('Agent build not found');
+
+    // Reset default for other builds of same OS and arch
+    db.prepare(`
+      UPDATE update_agent_builds
+      SET is_install_default = 0
+      WHERE target_os = ? AND target_arch = ?
+    `).run(build.target_os, build.target_arch);
+
+    db.prepare('UPDATE update_agent_builds SET is_install_default = 1 WHERE id = ?').run(buildId);
+
+    this.logAudit(userId, username, 'set_install_default_agent_build', undefined, undefined, undefined, {
+      buildId,
+      version: build.version,
+      targetOs: build.target_os,
+      targetArch: build.target_arch,
+    });
+  }
+
+  /**
+   * Delete an agent build
+   */
+  static deleteAgentBuild(buildId: string, userId: string, username: string): void {
+    const build = db.prepare('SELECT * FROM update_agent_builds WHERE id = ?').get(buildId) as AgentBuildRecord | undefined;
+    if (!build) throw new Error('Agent build not found');
+
+    if (fs.existsSync(build.file_path)) {
+      try { fs.unlinkSync(build.file_path); } catch {}
+    }
+
+    db.prepare('DELETE FROM update_agent_builds WHERE id = ?').run(buildId);
+    this.logAudit(userId, username, 'delete_agent_build', undefined, undefined, undefined, { buildId, version: build.version });
+  }
+
+  /**
+   * Queue agent self-update for a device
+   */
+  static queueAgentUpdate(
+    deviceId: string,
+    buildId: string | null,
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): string {
+    const deviceData = DeviceService.getDeviceForUser(deviceId, userId);
+    if (!deviceData) throw new Error('Device not found or access denied');
+
+    let payload: any = {};
+
+    if (buildId) {
+      const build = db.prepare('SELECT * FROM update_agent_builds WHERE id = ?').get(buildId) as AgentBuildRecord | undefined;
+      if (!build) throw new Error('Selected agent build not found');
+      payload = {
+        build_id: build.id,
+        version: build.version,
+        sha256: build.file_sha256,
+        download_path: `/api/updates/agent/download-build/${build.id}`,
+      };
+    } else {
+      payload = {
+        use_default_build: true,
+      };
+    }
+
+    return this.queueJob(deviceId, 'agent_update', payload, userId, username, 600, expiresAt);
+  }
+
+  /**
+   * Queue agent self-update for multiple devices
+   */
+  static queueFleetAgentUpdate(
+    deviceIds: string[],
+    buildId: string | null,
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): { queuedCount: number; jobIds: string[] } {
+    const jobIds: string[] = [];
+    for (const devId of deviceIds) {
+      try {
+        const jid = this.queueAgentUpdate(devId, buildId, userId, username, expiresAt);
+        jobIds.push(jid);
+      } catch (err: any) {
+        console.warn(`[AgentUpdateFleet] Skipped device ${devId}:`, err.message);
+      }
+    }
+    return { queuedCount: jobIds.length, jobIds };
+  }
+
+  /**
+   * ==========================================
+   * SCRIPT LIBRARY (PHASE 2)
+   * ==========================================
+   */
+
+  /**
+   * List all scripts with their latest version content
+   */
+  static getScripts(): ScriptRecord[] {
+    const scripts = (db.prepare(`
+      SELECT s.*, 
+        (SELECT MAX(version_num) FROM update_script_versions WHERE script_id = s.id) as latest_version,
+        (SELECT script_content FROM update_script_versions WHERE script_id = s.id ORDER BY version_num DESC LIMIT 1) as script_content
+      FROM update_scripts s
+      WHERE s.is_archived = 0
+      ORDER BY s.name ASC
+    `).all() as unknown) as ScriptRecord[];
+
+    return scripts;
+  }
+
+  /**
+   * Get single script by ID with all versions
+   */
+  static getScriptById(scriptId: string) {
+    const script = db.prepare('SELECT * FROM update_scripts WHERE id = ?').get(scriptId) as ScriptRecord | undefined;
+    if (!script) return null;
+
+    const versions = db.prepare(`
+      SELECT * FROM update_script_versions
+      WHERE script_id = ?
+      ORDER BY version_num DESC
+    `).all(scriptId);
+
+    return { ...script, versions };
+  }
+
+  /**
+   * Create a new script with Version 1
+   */
+  static createScript(
+    name: string,
+    description: string | undefined,
+    targetOs: 'windows' | 'linux' | 'all',
+    scriptType: 'powershell' | 'batch' | 'bash',
+    scriptContent: string,
+    timeoutSeconds: number = 600,
+    parametersSchemaJson: string | undefined,
+    notes: string | undefined,
+    userId: string,
+    username: string
+  ): ScriptRecord {
+    const scriptId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+
+    db.prepare(`
+      INSERT INTO update_scripts (
+        id, name, description, target_os, script_type, timeout_seconds,
+        parameters_schema_json, is_archived, created_by_user_id, created_by_username, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(scriptId, name.trim(), description?.trim() || null, targetOs, scriptType, timeoutSeconds, parametersSchemaJson || null, userId, username);
+
+    db.prepare(`
+      INSERT INTO update_script_versions (
+        id, script_id, version_num, script_content, notes, created_by_user_id, created_by_username, created_at
+      ) VALUES (?, ?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(versionId, scriptId, scriptContent, notes || 'Initial version', userId, username);
+
+    this.logAudit(userId, username, 'create_script', undefined, undefined, undefined, {
+      scriptId,
+      name,
+      targetOs,
+      scriptType,
+      timeoutSeconds,
+    });
+
+    return this.getScriptById(scriptId)!;
+  }
+
+  /**
+   * Update script metadata or create a new version
+   */
+  static updateScript(
+    scriptId: string,
+    name: string,
+    description: string | undefined,
+    targetOs: 'windows' | 'linux' | 'all',
+    scriptType: 'powershell' | 'batch' | 'bash',
+    timeoutSeconds: number,
+    parametersSchemaJson: string | undefined,
+    newScriptContent: string | undefined,
+    notes: string | undefined,
+    userId: string,
+    username: string
+  ): ScriptRecord {
+    const existing = db.prepare('SELECT * FROM update_scripts WHERE id = ?').get(scriptId) as ScriptRecord | undefined;
+    if (!existing) throw new Error('Script not found');
+
+    db.prepare(`
+      UPDATE update_scripts SET
+        name = ?, description = ?, target_os = ?, script_type = ?, timeout_seconds = ?,
+        parameters_schema_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(name.trim(), description?.trim() || null, targetOs, scriptType, timeoutSeconds, parametersSchemaJson || null, scriptId);
+
+    if (newScriptContent && newScriptContent.trim().length > 0) {
+      const maxVerRow = db.prepare('SELECT MAX(version_num) as max_ver FROM update_script_versions WHERE script_id = ?').get(scriptId) as { max_ver: number };
+      const nextVer = (maxVerRow.max_ver || 0) + 1;
+
+      db.prepare(`
+        INSERT INTO update_script_versions (
+          id, script_id, version_num, script_content, notes, created_by_user_id, created_by_username, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `).run(crypto.randomUUID(), scriptId, nextVer, newScriptContent, notes || `Version ${nextVer}`, userId, username);
+    }
+
+    this.logAudit(userId, username, 'update_script', undefined, undefined, undefined, { scriptId, name });
+    return this.getScriptById(scriptId)!;
+  }
+
+  /**
+   * Delete / archive a script
+   */
+  static deleteScript(scriptId: string, userId: string, username: string): void {
+    const existing = db.prepare('SELECT name FROM update_scripts WHERE id = ?').get(scriptId) as { name: string } | undefined;
+    if (!existing) throw new Error('Script not found');
+
+    db.prepare('DELETE FROM update_scripts WHERE id = ?').run(scriptId);
+    this.logAudit(userId, username, 'delete_script', undefined, undefined, undefined, { scriptId, name: existing.name });
+  }
+
+  /**
+   * Deploy script to selected devices passing parameters as environment variables
+   */
+  static deployScript(
+    scriptId: string,
+    versionNum: number | undefined,
+    deviceIds: string[],
+    parameters: Record<string, string>,
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): { queuedCount: number; jobIds: string[] } {
+    const script = db.prepare('SELECT * FROM update_scripts WHERE id = ?').get(scriptId) as ScriptRecord | undefined;
+    if (!script) throw new Error('Script not found');
+
+    let verRow: any;
+    if (versionNum) {
+      verRow = db.prepare('SELECT * FROM update_script_versions WHERE script_id = ? AND version_num = ?').get(scriptId, versionNum);
+    } else {
+      verRow = db.prepare('SELECT * FROM update_script_versions WHERE script_id = ? ORDER BY version_num DESC LIMIT 1').get(scriptId);
+    }
+
+    if (!verRow) throw new Error('Script version content not found');
+
+    const jobIds: string[] = [];
+    const payload = {
+      script_id: script.id,
+      script_name: script.name,
+      script_type: script.script_type,
+      target_os: script.target_os,
+      script_content: verRow.script_content,
+      parameters: parameters || {},
+    };
+
+    for (const devId of deviceIds) {
+      try {
+        const jid = this.queueJob(devId, 'run_script', payload, userId, username, script.timeout_seconds, expiresAt);
+        jobIds.push(jid);
+      } catch (err: any) {
+        console.warn(`[DeployScript] Failed to queue job for device ${devId}:`, err.message);
+      }
+    }
+
+    // Record complete script content and runtime parameters in immutable audit log
+    this.logAudit(userId, username, 'deploy_script', undefined, undefined, undefined, {
+      scriptId: script.id,
+      scriptName: script.name,
+      scriptType: script.script_type,
+      versionNum: verRow.version_num,
+      targetDeviceIds: deviceIds,
+      parameters,
+      scriptContent: verRow.script_content,
+      jobIds,
+    });
+
+    return { queuedCount: jobIds.length, jobIds };
+  }
+
+  /**
    * Get jobs list for accessible devices
    */
   static getJobs(userId: string, limit: number = 100) {
@@ -561,12 +1064,12 @@ export class UpdatesService {
    * Expiry & stuck jobs watchdog (runs periodically)
    */
   static runWatchdogJobCleanup(): void {
-    // 1. Expire queued jobs past expires_at
-    const expiredCount = db.prepare(`
+    // 1. Expire queued / waiting jobs past expires_at
+    db.prepare(`
       UPDATE update_jobs
       SET status = 'failed', stderr = 'Job expired before device came online', completed_at = CURRENT_TIMESTAMP
-      WHERE status = 'queued' AND expires_at <= CURRENT_TIMESTAMP
-    `).run().changes;
+      WHERE status IN ('queued', 'waiting_for_device') AND expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP
+    `).run();
 
     // 2. Mark stuck jobs past timeout + 5 minutes grace (300s)
     const stuckJobs = db.prepare(`

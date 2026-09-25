@@ -10,9 +10,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +27,12 @@ type HubReportResponse struct {
 	Status  string                `json:"status"`
 	NextJob *collector.JobPayload `json:"next_job,omitempty"`
 }
+
+var (
+	watchdogTimer *time.Timer
+	watchdogOnce  sync.Once
+	isHealthyOnce sync.Once
+)
 
 func main() {
 	hubURL := flag.String("hub", "", "Shoreline Connect Hub URL (e.g. http://100.99.99.176:3001)")
@@ -111,6 +120,29 @@ func main() {
 }
 
 func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool, stopChan <-chan struct{}) {
+	exePath, err := os.Executable()
+	if err == nil {
+		exePath, _ = filepath.Abs(exePath)
+		bakPath := exePath + ".bak"
+
+		// If a backup file exists, initialize the 2-minute rollback watchdog
+		if _, err := os.Stat(bakPath); err == nil {
+			log.Printf("[Watchdog] Backup binary detected at %s. Initializing 2-minute check-in health watchdog...", bakPath)
+			watchdogTimer = time.AfterFunc(2*time.Minute, func() {
+				watchdogOnce.Do(func() {
+					log.Printf("[Watchdog] ⚠️ Failed to achieve successful check-in with hub within 2 minutes! Triggering rollback to %s...", bakPath)
+					_ = os.Rename(bakPath, exePath)
+					if runtime.GOOS == "windows" {
+						_ = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Restart-Service ShorelineAgent -Force").Start()
+					} else {
+						_ = exec.Command("systemctl", "restart", "shoreline-agent").Start()
+					}
+					os.Exit(1)
+				})
+			})
+		}
+	}
+
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureTLS},
 	}
@@ -156,14 +188,14 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 	}()
 
 	// Send initial metrics payload immediately
-	sendPayload(client, reportURL, token, col, sysInfo, jobRunner)
+	sendPayload(client, reportURL, token, col, sysInfo, jobRunner, exePath)
 
 	for {
 		select {
 		case <-stopChan:
 			return
 		case <-metricsTicker.C:
-			sendPayload(client, reportURL, token, col, sysInfo, jobRunner)
+			sendPayload(client, reportURL, token, col, sysInfo, jobRunner, exePath)
 		case <-inventoryTicker.C:
 			jobRunner.ExecuteJob(collector.JobPayload{
 				ID:          fmt.Sprintf("periodic_inv_%d", time.Now().Unix()),
@@ -180,7 +212,7 @@ func runAgentLoop(hubURL, token string, interval time.Duration, insecureTLS bool
 	}
 }
 
-func sendPayload(client *http.Client, reportURL, token string, col collector.Collector, sysInfo *collector.SystemInfo, jobRunner *jobs.JobRunner) {
+func sendPayload(client *http.Client, reportURL, token string, col collector.Collector, sysInfo *collector.SystemInfo, jobRunner *jobs.JobRunner, exePath string) {
 	metrics, err := col.Collect()
 	if err != nil {
 		log.Printf("Error collecting metrics: %v", err)
@@ -219,6 +251,23 @@ func sendPayload(client *http.Client, reportURL, token string, col collector.Col
 		log.Printf("Hub rejected metrics payload (HTTP %d): %s", resp.StatusCode, string(body))
 		return
 	}
+
+	// Upon successful check-in, create .healthy marker and cancel rollback timer
+	isHealthyOnce.Do(func() {
+		if exePath != "" {
+			markerPath := filepath.Join(filepath.Dir(exePath), ".healthy")
+			_ = os.WriteFile(markerPath, []byte(time.Now().Format(time.RFC3339)), 0644)
+
+			bakPath := exePath + ".bak"
+			if _, err := os.Stat(bakPath); err == nil {
+				if watchdogTimer != nil {
+					watchdogTimer.Stop()
+				}
+				_ = os.Remove(bakPath)
+				log.Printf("[Watchdog] ✅ First metrics report succeeded! Agent update confirmed healthy. Removed backup binary.")
+			}
+		}
+	})
 
 	// Read response body to check for piggybacked jobs
 	var reportResp HubReportResponse

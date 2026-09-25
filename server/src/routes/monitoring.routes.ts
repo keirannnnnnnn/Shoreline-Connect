@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+import { db } from '../db/database.js';
 import { MonitoringService } from '../services/monitoring.service.js';
+import { UpdatesService } from '../services/updates.service.js';
 import { authenticateUser, requireTabAccess, AuthenticatedRequest } from '../middleware/auth.middleware.js';
 
 export const monitoringRouter = Router();
@@ -77,20 +79,38 @@ monitoringRouter.get('/agent/download/:os/:arch', (req: Request, res: Response) 
   const { os, arch } = req.params;
 
   let filename = '';
+  let targetArch = 'amd64';
   if (os === 'linux') {
     if (arch === 'arm64' || arch === 'aarch64' || arch === 'armv7l') {
       filename = 'shoreline-agent-linux-arm64';
+      targetArch = 'arm64';
     } else {
       filename = 'shoreline-agent-linux-amd64';
+      targetArch = 'amd64';
     }
   } else if (os === 'windows') {
     filename = 'shoreline-agent-windows-amd64.exe';
+    targetArch = 'amd64';
   } else {
     return res.status(400).json({ error: 'Unsupported operating system' });
   }
 
+  // 1. Check if there is an explicit install default build in database
+  try {
+    const defaultBuild = db.prepare(`
+      SELECT file_path FROM update_agent_builds
+      WHERE target_os = ? AND target_arch = ? AND is_install_default = 1
+    `).get(os, targetArch) as { file_path: string } | undefined;
+
+    if (defaultBuild && fs.existsSync(defaultBuild.file_path)) {
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.sendFile(defaultBuild.file_path);
+    }
+  } catch {}
+
   // Check multiple candidate locations (Docker /app/server/agents, local agent/dist, or server/agents)
   const candidatePaths = [
+    path.resolve(UpdatesService.getAgentBinariesDir(), filename),
     path.resolve(__dirname, '../../agents', filename),
     path.resolve(__dirname, '../../../agents', filename),
     path.resolve(__dirname, '../../../agent/dist', filename),

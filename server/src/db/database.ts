@@ -463,7 +463,7 @@ export function initDatabase() {
       id TEXT PRIMARY KEY,
       device_id TEXT NOT NULL,
       job_type TEXT NOT NULL CHECK (job_type IN ('inventory_scan', 'check_updates', 'install', 'uninstall', 'upgrade', 'agent_update', 'run_script')),
-      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
       payload_json TEXT NOT NULL,
       exit_code INTEGER,
       stdout TEXT,
@@ -471,7 +471,7 @@ export function initDatabase() {
       reboot_required INTEGER DEFAULT 0,
       detection_matched INTEGER,
       timeout_seconds INTEGER DEFAULT 1800,
-      expires_at DATETIME NOT NULL,
+      expires_at DATETIME,
       created_by_user_id TEXT,
       created_by_username TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -483,6 +483,56 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_update_jobs_dev_status ON update_jobs(device_id, status);
     CREATE INDEX IF NOT EXISTS idx_update_jobs_created ON update_jobs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS update_agent_builds (
+      id TEXT PRIMARY KEY,
+      version TEXT NOT NULL,
+      target_os TEXT NOT NULL CHECK (target_os IN ('windows', 'linux')),
+      target_arch TEXT NOT NULL CHECK (target_arch IN ('amd64', 'arm64')),
+      file_path TEXT NOT NULL,
+      file_sha256 TEXT NOT NULL,
+      file_size_bytes INTEGER DEFAULT 0,
+      is_install_default INTEGER DEFAULT 0,
+      notes TEXT,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_builds_os_arch ON update_agent_builds(target_os, target_arch);
+
+    CREATE TABLE IF NOT EXISTS update_scripts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      target_os TEXT NOT NULL CHECK (target_os IN ('windows', 'linux', 'all')),
+      script_type TEXT NOT NULL CHECK (script_type IN ('powershell', 'batch', 'bash')),
+      timeout_seconds INTEGER DEFAULT 600,
+      parameters_schema_json TEXT,
+      is_archived INTEGER DEFAULT 0,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS update_script_versions (
+      id TEXT PRIMARY KEY,
+      script_id TEXT NOT NULL,
+      version_num INTEGER NOT NULL,
+      script_content TEXT NOT NULL,
+      notes TEXT,
+      created_by_user_id TEXT,
+      created_by_username TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (script_id) REFERENCES update_scripts(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE(script_id, version_num)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_script_ver_script ON update_script_versions(script_id, version_num DESC);
 
     CREATE TABLE IF NOT EXISTS update_audit_logs (
       id TEXT PRIMARY KEY,
@@ -503,6 +553,42 @@ export function initDatabase() {
     db.exec('ALTER TABLE monitoring_agents ADD COLUMN agent_version TEXT;');
   } catch {}
 
+  // Migrate update_jobs table if expires_at has NOT NULL constraint
+  try {
+    const cols = db.prepare("PRAGMA table_info(update_jobs)").all() as Array<{ name: string; notnull: number }>;
+    const expCol = cols.find(c => c.name === 'expires_at');
+    if (expCol && expCol.notnull === 1) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS update_jobs_migration (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          job_type TEXT NOT NULL CHECK (job_type IN ('inventory_scan', 'check_updates', 'install', 'uninstall', 'upgrade', 'agent_update', 'run_script')),
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'waiting_for_device', 'sent', 'downloading', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+          payload_json TEXT NOT NULL,
+          exit_code INTEGER,
+          stdout TEXT,
+          stderr TEXT,
+          reboot_required INTEGER DEFAULT 0,
+          detection_matched INTEGER,
+          timeout_seconds INTEGER DEFAULT 1800,
+          expires_at DATETIME,
+          created_by_user_id TEXT,
+          created_by_username TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          started_at DATETIME,
+          completed_at DATETIME,
+          FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+          FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT OR IGNORE INTO update_jobs_migration SELECT * FROM update_jobs;
+        DROP TABLE update_jobs;
+        ALTER TABLE update_jobs_migration RENAME TO update_jobs;
+        CREATE INDEX IF NOT EXISTS idx_update_jobs_dev_status ON update_jobs(device_id, status);
+        CREATE INDEX IF NOT EXISTS idx_update_jobs_created ON update_jobs(created_at DESC);
+      `);
+    }
+  } catch {}
+
   // Initialize default settings if not exists
   const insertSetting = db.prepare('INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)');
   insertSetting.run('ad_domain', config.ad.domain);
@@ -514,13 +600,21 @@ export function initDatabase() {
   insertSetting.run('tab_group_monitoring', process.env.TAB_GROUP_MONITORING || '');
   insertSetting.run('tab_group_tracking', process.env.TAB_GROUP_TRACKING || '');
   insertSetting.run('tab_group_cloud', process.env.TAB_GROUP_CLOUD || '');
-  insertSetting.run('tab_group_updates', process.env.TAB_GROUP_UPDATES || '');
+  insertSetting.run('tab_group_updates', 'Shoreline Connect Updates Users');
   insertSetting.run('git_repo_url', config.git.repoUrl);
   insertSetting.run('git_branch', config.git.branch);
   insertSetting.run('monitoring_hub_url', process.env.MONITORING_HUB_URL || process.env.TAILSCALE_IP || '');
   insertSetting.run('tracking_map_provider', 'leaflet');
   insertSetting.run('google_maps_api_key', '');
   insertSetting.run('cloud_storage_base_path', '');
+
+  // Ensure tab_group_updates is not blank on migration
+  try {
+    const curTabUpdates = db.prepare("SELECT value FROM system_settings WHERE key = 'tab_group_updates'").get() as { value: string } | undefined;
+    if (!curTabUpdates || !curTabUpdates.value || curTabUpdates.value.trim() === '') {
+      db.prepare("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('tab_group_updates', 'Shoreline Connect Updates Users')").run();
+    }
+  } catch {}
 
   console.log('✅ SQLite Database initialized at:', dbPath);
 }

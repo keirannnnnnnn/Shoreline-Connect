@@ -680,17 +680,26 @@ echo "-> Detected architecture: \$BIN_ARCH"
 TARGET_BIN="/usr/local/bin/shoreline-agent"
 DOWNLOAD_URL="\${HUB_URL}/api/monitoring/agent/download/linux/\${BIN_ARCH}"
 
+# Stop existing service if running so binary isn't locked
+if systemctl is-active --quiet shoreline-agent 2>/dev/null; then
+  echo "-> Stopping active shoreline-agent service..."
+  systemctl stop shoreline-agent 2>/dev/null || true
+  sleep 1
+fi
+
 echo "-> Downloading Shoreline agent binary from \${DOWNLOAD_URL}..."
+TMP_BIN="/tmp/shoreline-agent.tmp.\$\$"
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "\$DOWNLOAD_URL" -o "\$TARGET_BIN"
+  curl -fsSL "\$DOWNLOAD_URL" -o "\$TMP_BIN"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "\$TARGET_BIN" "\$DOWNLOAD_URL"
+  wget -qO "\$TMP_BIN" "\$DOWNLOAD_URL"
 else
   echo "❌ Error: Neither curl nor wget is available."
   exit 1
 fi
 
-chmod +x "\$TARGET_BIN"
+chmod +x "\$TMP_BIN"
+mv -f "\$TMP_BIN" "\$TARGET_BIN"
 echo "-> Installed binary to \$TARGET_BIN"
 
 echo "-> Registering and starting systemd service..."
@@ -727,15 +736,28 @@ if (-not (Test-Path $InstallDir)) {
 }
 
 $ExePath = Join-Path $InstallDir "shoreline-agent.exe"
+$TempExePath = Join-Path $InstallDir "shoreline-agent.new.exe"
 $DownloadUrl = "$HubUrl/api/monitoring/agent/download/windows/amd64"
+
+# Stop existing service if running and wait for process to terminate
+$existingSvc = Get-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
+if ($existingSvc) {
+    Write-Host "-> Stopping active ShorelineAgent service..." -ForegroundColor Yellow
+    Stop-Service -Name "ShorelineAgent" -Force -ErrorAction SilentlyContinue
+    $waitLoops = 0
+    while ((Get-Process -Name "shoreline-agent" -ErrorAction SilentlyContinue) -and ($waitLoops -lt 10)) {
+        Start-Sleep -Milliseconds 500
+        $waitLoops++
+    }
+}
 
 Write-Host "-> Downloading Shoreline agent binary from $DownloadUrl..." -ForegroundColor Yellow
 try {
-    # Stop existing service if running so binary can be overwritten cleanly
-    Stop-Service -Name "ShorelineAgent" -ErrorAction SilentlyContinue
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $ExePath -UseBasicParsing
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempExePath -UseBasicParsing
+    Move-Item -Path $TempExePath -Destination $ExePath -Force
 } catch {
     Write-Host "❌ Failed to download agent binary: $_" -ForegroundColor Red
+    if (Test-Path $TempExePath) { Remove-Item -Path $TempExePath -Force -ErrorAction SilentlyContinue }
     return
 }
 

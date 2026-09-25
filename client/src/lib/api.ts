@@ -1,4 +1,4 @@
-import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage, UpdatesOverview, SoftwareGroup, SoftwareInventoryHistoryItem, UpdateJob, UpdateAuditLog } from '../types/index.js';
+import { User, Device, Folder, DeviceShare, GuestShare, SessionLog, SystemSettings, UpdateStatus, TrackedItem, TrackingJourney, JourneyPoint, TrackingSettings, CloudItem, CloudShare, QuickLinkAuditRecord, CloudSettings, CloudFolderTreeNode, CloudStorageUsage, UpdatesOverview, SoftwareGroup, SoftwareInventoryHistoryItem, UpdateJob, UpdateAuditLog, AgentItem, AgentBuildItem, ScriptItem } from '../types/index.js';
 
 const API_BASE = '/api';
 
@@ -403,26 +403,90 @@ export const api = {
     getOverview: () =>
       fetchJson<UpdatesOverview>('/updates/overview'),
     getFleetInventory: (search?: string) =>
-      fetchJson<{ inventory: SoftwareGroup[] }>(`/updates/inventory${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+      fetchJson<SoftwareGroup[]>(`/updates/inventory${search ? `?q=${encodeURIComponent(search)}` : ''}`),
     getDeviceInventory: (deviceId: string) =>
       fetchJson<{ items: any[]; history: SoftwareInventoryHistoryItem[]; deviceName: string }>(`/updates/inventory/device/${deviceId}`),
     rescanDevice: (deviceId: string) =>
       fetchJson<{ success: boolean; jobId: string }>(`/updates/inventory/rescan/${deviceId}`, {
         method: 'POST',
       }),
+    rescanAll: () =>
+      fetchJson<{ success: boolean; queuedCount: number }>('/updates/inventory/rescan-all', {
+        method: 'POST',
+      }),
+    getAgents: () =>
+      fetchJson<AgentItem[]>('/updates/agents'),
+    getAgentBuilds: () =>
+      fetchJson<AgentBuildItem[]>('/updates/agents/builds'),
+    uploadAgentBuild: async (formData: FormData) => {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/updates/agents/upload', {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(err.error || 'Failed to upload agent binary');
+      }
+      return res.json() as Promise<{ success: boolean; build: AgentBuildItem }>;
+    },
+    setDefaultAgentBuild: (id: string) =>
+      fetchJson<{ success: boolean }>(`/updates/agents/default-build/${id}`, {
+        method: 'POST',
+      }),
+    deleteAgentBuild: (id: string) =>
+      fetchJson<{ success: boolean }>(`/updates/agents/builds/${id}`, {
+        method: 'DELETE',
+      }),
+    updateAgent: (deviceId: string, buildId?: string | null, expiresAt?: string | null) =>
+      fetchJson<{ success: boolean; jobId: string }>(`/updates/agent/self-update/${deviceId}`, {
+        method: 'POST',
+        body: JSON.stringify({ buildId, expiresAt }),
+      }),
+    updateAgentFleet: (deviceIds: string[], buildId?: string | null, expiresAt?: string | null) =>
+      fetchJson<{ success: boolean; queuedCount: number; jobIds: string[] }>('/updates/agents/update-fleet', {
+        method: 'POST',
+        body: JSON.stringify({ deviceIds, buildId, expiresAt }),
+      }),
+    getScripts: () =>
+      fetchJson<ScriptItem[]>('/updates/scripts'),
+    getScript: (id: string) =>
+      fetchJson<ScriptItem>(`/updates/scripts/${id}`),
+    createScript: (data: any) =>
+      fetchJson<{ success: boolean; script: ScriptItem }>('/updates/scripts', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    updateScript: (id: string, data: any) =>
+      fetchJson<{ success: boolean; script: ScriptItem }>(`/updates/scripts/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    deleteScript: (id: string) =>
+      fetchJson<{ success: boolean }>(`/updates/scripts/${id}`, {
+        method: 'DELETE',
+      }),
+    deployScript: (data: { scriptId: string; versionNum?: number; deviceIds: string[]; parameters?: Record<string, string>; expiresAt?: string | null }) =>
+      fetchJson<{ success: boolean; queuedCount: number; jobIds: string[] }>('/updates/deploy/script', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
     getJobs: (limit: number = 100) =>
-      fetchJson<{ jobs: UpdateJob[] }>(`/updates/jobs?limit=${limit}`),
+      fetchJson<UpdateJob[]>(`/updates/jobs?limit=${limit}`),
     cancelJob: (jobId: string) =>
       fetchJson<{ success: boolean }>(`/updates/jobs/${jobId}/cancel`, {
         method: 'POST',
       }),
-    getAuditLogs: (limit: number = 200) =>
-      fetchJson<{ logs: UpdateAuditLog[] }>(`/updates/audit?limit=${limit}`),
-    selfUpdateAgent: (deviceId: string, targetVersion?: string) =>
-      fetchJson<{ success: boolean; jobId: string }>(`/updates/agent/self-update/${deviceId}`, {
+    cancelJobsBulk: (jobIds: string[]) =>
+      fetchJson<{ success: boolean; cancelledCount: number }>('/updates/jobs/bulk-cancel', {
         method: 'POST',
-        body: JSON.stringify({ targetVersion }),
+        body: JSON.stringify({ jobIds }),
       }),
+    getAuditLogs: (limit: number = 200) =>
+      fetchJson<UpdateAuditLog[]>(`/updates/audit?limit=${limit}`),
   },
 };
 

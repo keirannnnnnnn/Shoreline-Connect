@@ -331,6 +331,8 @@ export interface UpdatesOverview {
   detectionUnavailable: number;
   agentsOutOfDate: number;
   totalTrackedSoftware: number;
+  totalMonitoredAgents?: number;
+  agentsOnline?: number;
 }
 
 export interface UpdateJob {
@@ -338,7 +340,7 @@ export interface UpdateJob {
   device_id: string;
   device_name?: string;
   job_type: 'inventory_scan' | 'check_updates' | 'install' | 'uninstall' | 'upgrade' | 'agent_update' | 'run_script';
-  status: 'queued' | 'sent' | 'downloading' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+  status: 'queued' | 'waiting_for_device' | 'sent' | 'downloading' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
   payload_json: string;
   exit_code?: number | null;
   stdout?: string | null;
@@ -346,7 +348,7 @@ export interface UpdateJob {
   reboot_required?: number;
   detection_matched?: number | null;
   timeout_seconds: number;
-  expires_at: string;
+  expires_at?: string | null;
   created_by_user_id?: string | null;
   created_by_username: string;
   created_at: string;
@@ -363,6 +365,78 @@ export interface UpdateAuditLog {
   device_name?: string | null;
   package_id?: string | null;
   details_json?: string | null;
+  created_at: string;
+}
+
+export interface AgentItem {
+  deviceId: string;
+  deviceName: string;
+  host: string;
+  protocol: string;
+  agentId: string;
+  agentVersion: string;
+  status: 'online' | 'offline' | 'pending';
+  lastSeenAt: string | null;
+  platform: string;
+  os: 'windows' | 'linux';
+  arch: 'amd64' | 'arm64';
+  cpuModel?: string | null;
+  cpuCores?: number | null;
+  activeJob?: {
+    id: string;
+    job_type: string;
+    status: string;
+    created_at: string;
+  } | null;
+}
+
+export interface AgentBuildItem {
+  id: string;
+  version: string;
+  target_os: 'windows' | 'linux';
+  target_arch: 'amd64' | 'arm64';
+  file_path: string;
+  file_sha256: string;
+  file_size_bytes: number;
+  is_install_default: number;
+  notes?: string | null;
+  created_by_username: string;
+  created_at: string;
+}
+
+export interface ScriptParameterDef {
+  name: string;
+  label: string;
+  defaultValue?: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface ScriptItem {
+  id: string;
+  name: string;
+  description?: string | null;
+  target_os: 'windows' | 'linux' | 'all';
+  script_type: 'powershell' | 'batch' | 'bash';
+  timeout_seconds: number;
+  parameters_schema_json?: string | null;
+  is_archived?: number;
+  created_by_user_id?: string | null;
+  created_by_username: string;
+  created_at: string;
+  updated_at: string;
+  latest_version?: number;
+  script_content?: string;
+  versions?: ScriptVersionItem[];
+}
+
+export interface ScriptVersionItem {
+  id: string;
+  script_id: string;
+  version_num: number;
+  script_content: string;
+  notes?: string | null;
+  created_by_username: string;
   created_at: string;
 }
 
