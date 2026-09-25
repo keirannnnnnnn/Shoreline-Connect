@@ -533,26 +533,54 @@ export class UpdatesService {
       WHERE device_id IN (${placeholders})
     `).get(...deviceIds) as { count: number };
 
-    // 5. Total agents & online count
-    const agents = db.prepare(`
-      SELECT status, last_seen_at
+    const latestVersion = this.getLatestServerAgentVersion();
+    const agentsWithVer = db.prepare(`
+      SELECT status, last_seen_at, agent_version
       FROM monitoring_agents
       WHERE device_id IN (${placeholders})
-    `).all(...deviceIds) as Array<{ status: string; last_seen_at: string | null }>;
+    `).all(...deviceIds) as Array<{ status: string; last_seen_at: string | null; agent_version: string | null }>;
 
     const now = Date.now();
-    const agentsOnline = agents.filter(a => a.status === 'online' && a.last_seen_at && (now - new Date(a.last_seen_at).getTime() <= 45000)).length;
+    const agentsOnline = agentsWithVer.filter(a => a.status === 'online' && a.last_seen_at && (now - new Date(a.last_seen_at).getTime() <= 45000)).length;
+    const agentsOutOfDate = agentsWithVer.filter(a => (a.agent_version || '') !== latestVersion).length;
 
     return {
       devicesWithUpdates: updatesRow.count || 0,
       failedJobsLast7Days: failedJobsRow.count || 0,
       devicesPendingReboot: rebootRow.count || 0,
       detectionUnavailable: 0,
-      agentsOutOfDate: 0,
+      agentsOutOfDate,
       totalTrackedSoftware: softwareCountRow.count || 0,
-      totalMonitoredAgents: agents.length,
+      totalMonitoredAgents: agentsWithVer.length,
       agentsOnline,
+      latestServerVersion: latestVersion,
     };
+  }
+
+  /**
+   * Resolve the version string of the precompiled binaries built with this server
+   */
+  static getLatestServerAgentVersion(): string {
+    const candidatePaths = [
+      path.resolve(this.getAgentBinariesDir(), 'VERSION'),
+      path.resolve(__dirname, '../../agents/VERSION'),
+      path.resolve(__dirname, '../../../agents/VERSION'),
+      path.resolve(__dirname, '../../../agent/VERSION'),
+      path.resolve(process.cwd(), 'agent/VERSION'),
+      path.resolve(process.cwd(), 'server/agents/VERSION'),
+      path.resolve(process.cwd(), '../agent/VERSION'),
+    ];
+
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        try {
+          const ver = fs.readFileSync(p, 'utf8').trim();
+          if (ver) return ver;
+        } catch {}
+      }
+    }
+
+    return '1.1.0';
   }
 
   /**
@@ -640,9 +668,10 @@ export class UpdatesService {
   /**
    * Get full Agents list with platform, version drift, and online state
    */
-  static getAgentsList(userId: string) {
+  static getAgentsList(userId: string): { latestVersion: string; agents: any[] } {
     const accessibleDevices = DeviceService.getUserDevices(userId);
-    if (accessibleDevices.length === 0) return [];
+    const latestVersion = this.getLatestServerAgentVersion();
+    if (accessibleDevices.length === 0) return { latestVersion, agents: [] };
 
     const agentsList: any[] = [];
     const now = Date.now();
@@ -680,13 +709,18 @@ export class UpdatesService {
         LIMIT 1
       `).get(d.id);
 
+      const reportedVer = agent.agent_version || '1.0.0';
+      const isOutdated = reportedVer !== latestVersion;
+
       agentsList.push({
         deviceId: d.id,
         deviceName: d.name,
         host: d.host,
         protocol: d.protocol,
         agentId: agent.id,
-        agentVersion: agent.agent_version || '1.0.0',
+        agentVersion: reportedVer,
+        latestVersion,
+        isOutdated,
         status: effectiveStatus,
         lastSeenAt: agent.last_seen_at,
         platform: parsedSysInfo ? `${parsedSysInfo.os || 'unknown'} (${parsedSysInfo.arch || 'unknown'})` : 'unknown',
@@ -698,7 +732,23 @@ export class UpdatesService {
       });
     }
 
-    return agentsList;
+    return { latestVersion, agents: agentsList };
+  }
+
+  /**
+   * One-click queue updates for all outdated agents
+   */
+  static updateAllOutdatedAgents(
+    userId: string,
+    username: string,
+    expiresAt?: string | null
+  ): { queuedCount: number; jobIds: string[] } {
+    const data = this.getAgentsList(userId);
+    const outdatedDevIds = data.agents.filter((a) => a.isOutdated).map((a) => a.deviceId);
+    if (outdatedDevIds.length === 0) {
+      return { queuedCount: 0, jobIds: [] };
+    }
+    return this.queueFleetAgentUpdate(outdatedDevIds, null, userId, username, expiresAt);
   }
 
   /**

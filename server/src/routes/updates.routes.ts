@@ -354,6 +354,23 @@ updatesRouter.post('/agents/update-fleet', updatesAdminAuth, (req: Authenticated
   }
 });
 
+/**
+ * Trigger agent self-update for all outdated agents (Admin only)
+ */
+updatesRouter.post('/agents/update-outdated', updatesAdminAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { expiresAt } = req.body || {};
+    const result = UpdatesService.updateAllOutdatedAgents(
+      req.user!.userId,
+      req.user!.username,
+      expiresAt || null
+    );
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 /* ==========================================================================
    SCRIPT LIBRARY API ENDPOINTS (PHASE 2)
    ========================================================================== */

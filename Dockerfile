@@ -4,9 +4,11 @@ WORKDIR /build
 COPY agent/ ./
 RUN mkdir -p /binaries && \
     go mod tidy && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-linux-amd64 . && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-linux-arm64 . && \
-    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /binaries/shoreline-agent-windows-amd64.exe .
+    AGENT_VER=$(cat VERSION 2>/dev/null || echo "1.1.0") && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X shoreline-agent/collector.AgentVersion=${AGENT_VER}" -o /binaries/shoreline-agent-linux-amd64 . && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X shoreline-agent/collector.AgentVersion=${AGENT_VER}" -o /binaries/shoreline-agent-linux-arm64 . && \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X shoreline-agent/collector.AgentVersion=${AGENT_VER}" -o /binaries/shoreline-agent-windows-amd64.exe . && \
+    echo "${AGENT_VER}" > /binaries/VERSION
 
 # Stage 1: Build Frontend SPA
 FROM node:24-alpine AS client-builder

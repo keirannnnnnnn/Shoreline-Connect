@@ -415,7 +415,12 @@ export const api = {
         method: 'POST',
       }),
     getAgents: () =>
-      fetchJson<AgentItem[]>('/updates/agents'),
+      fetchJson<{ latestVersion: string; agents: AgentItem[] } | AgentItem[]>('/updates/agents').then((res) => {
+        if (Array.isArray(res)) {
+          return { latestVersion: '1.1.0', agents: res };
+        }
+        return res;
+      }),
     getAgentBuilds: () =>
       fetchJson<AgentBuildItem[]>('/updates/agents/builds'),
     uploadAgentBuild: async (formData: FormData) => {
@@ -450,6 +455,11 @@ export const api = {
       fetchJson<{ success: boolean; queuedCount: number; jobIds: string[] }>('/updates/agents/update-fleet', {
         method: 'POST',
         body: JSON.stringify({ deviceIds, buildId, expiresAt }),
+      }),
+    updateAllOutdatedAgents: (expiresAt?: string | null) =>
+      fetchJson<{ success: boolean; queuedCount: number; jobIds: string[] }>('/updates/agents/update-outdated', {
+        method: 'POST',
+        body: JSON.stringify({ expiresAt }),
       }),
     getScripts: () =>
       fetchJson<ScriptItem[]>('/updates/scripts'),

@@ -333,6 +333,7 @@ export interface UpdatesOverview {
   totalTrackedSoftware: number;
   totalMonitoredAgents?: number;
   agentsOnline?: number;
+  latestServerVersion?: string;
 }
 
 export interface UpdateJob {
@@ -375,6 +376,8 @@ export interface AgentItem {
   protocol: string;
   agentId: string;
   agentVersion: string;
+  latestVersion?: string;
+  isOutdated?: boolean;
   status: 'online' | 'offline' | 'pending';
   lastSeenAt: string | null;
   platform: string;

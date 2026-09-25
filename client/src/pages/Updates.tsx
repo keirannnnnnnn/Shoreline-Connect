@@ -60,7 +60,9 @@ export const Updates: React.FC = () => {
   const [runtimeParams, setRuntimeParams] = useState<Record<string, string>>({});
   const [scriptExpiryOption, setScriptExpiryOption] = useState<string>('none');
 
-  // Agent Modals
+  // Agent Modals & Version State
+  const [latestServerVersion, setLatestServerVersion] = useState<string>('1.1.0');
+  const [showAdvancedBuilds, setShowAdvancedBuilds] = useState<boolean>(false);
   const [isUploadAgentModalOpen, setIsUploadAgentModalOpen] = useState(false);
   const [isBuildsDrawerOpen, setIsBuildsDrawerOpen] = useState(false);
   const [agentUploadForm, setAgentUploadForm] = useState({
@@ -86,10 +88,10 @@ export const Updates: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [ov, inv, ags, blds, scrs, jbs, aud] = await Promise.all([
+      const [ov, inv, agsRes, blds, scrs, jbs, aud] = await Promise.all([
         api.updates.getOverview().catch(() => null),
         api.updates.getFleetInventory(searchQuery).catch(() => []),
-        api.updates.getAgents().catch(() => []),
+        api.updates.getAgents().catch(() => ({ latestVersion: '1.1.0', agents: [] })),
         api.updates.getAgentBuilds().catch(() => []),
         api.updates.getScripts().catch(() => []),
         api.updates.getJobs(100).catch(() => []),
@@ -97,7 +99,12 @@ export const Updates: React.FC = () => {
       ]);
       setOverview(ov);
       setInventory(inv);
-      setAgents(ags);
+      if (agsRes && 'agents' in agsRes) {
+        setAgents(agsRes.agents);
+        if (agsRes.latestVersion) setLatestServerVersion(agsRes.latestVersion);
+      } else if (Array.isArray(agsRes)) {
+        setAgents(agsRes);
+      }
       setAgentBuilds(blds);
       setScripts(scrs);
       setJobs(jbs);
@@ -111,11 +118,32 @@ export const Updates: React.FC = () => {
     loadData();
     const interval = setInterval(() => {
       api.updates.getJobs(100).then(setJobs).catch(() => {});
-      api.updates.getAgents().then(setAgents).catch(() => {});
+      api.updates.getAgents().then((res) => {
+        if (res && 'agents' in res) {
+          setAgents(res.agents);
+          if (res.latestVersion) setLatestServerVersion(res.latestVersion);
+        } else if (Array.isArray(res)) {
+          setAgents(res);
+        }
+      }).catch(() => {});
       api.updates.getOverview().then(setOverview).catch(() => {});
     }, 15000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleUpdateAllOutdated = async () => {
+    try {
+      const res = await api.updates.updateAllOutdatedAgents();
+      if (res.queuedCount === 0) {
+        showMsg('All agents are already up to date.');
+      } else {
+        showMsg(`Queued updates for ${res.queuedCount} outdated agents.`);
+      }
+      api.updates.getJobs().then(setJobs);
+    } catch (err: any) {
+      showMsg(err.message, 'error');
+    }
+  };
 
   const handleRescanDevice = async (deviceId: string) => {
     try {
@@ -825,7 +853,7 @@ export const Updates: React.FC = () => {
           <div className="space-y-4">
             {/* Toolbar */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-2 rounded-2xl bg-surface border border-surface-border">
-              <div className="flex items-center gap-2 text-xs text-slate-400 px-2">
+              <div className="flex items-center gap-2 text-xs text-slate-400 px-2 flex-wrap">
                 <span>
                   <strong className="text-white">{agents.length}</strong> monitored devices
                 </span>
@@ -833,37 +861,22 @@ export const Updates: React.FC = () => {
                 <span className="text-emerald-400 font-medium">
                   {agents.filter((a) => a.status === 'online').length} online
                 </span>
+                <span>•</span>
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-medium bg-brand-500/10 text-brand-300 border border-brand-500/20">
+                  Latest available: v{latestServerVersion}
+                </span>
               </div>
 
               {isAdmin && (
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => setIsBuildsDrawerOpen(true)}
-                    className="px-3 py-1.5 bg-surface-card hover:bg-surface-hover text-slate-200 border border-surface-border rounded-xl text-xs font-medium transition"
-                  >
-                    Manage Builds ({agentBuilds.length})
-                  </button>
-                  <button
-                    onClick={() => setIsUploadAgentModalOpen(true)}
-                    className="px-3 py-1.5 bg-surface-card hover:bg-surface-hover text-slate-200 border border-surface-border rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
-                  >
-                    <SymbolIcon name="arrow.up.circle" className="w-3.5 h-3.5 text-brand-400" />
-                    <span>Upload Build</span>
-                  </button>
-
-                  {agentBuilds.length > 0 && selectedAgentIds.length > 0 && (
-                    <select
-                      value={bulkTargetBuildId}
-                      onChange={(e) => setBulkTargetBuildId(e.target.value)}
-                      className="px-2.5 py-1.5 rounded-xl bg-surface-card border border-surface-border text-xs text-slate-200 focus:outline-none"
+                  {agents.filter((a) => a.isOutdated).length > 0 && (
+                    <button
+                      onClick={handleUpdateAllOutdated}
+                      className="px-3 py-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 transition"
                     >
-                      <option value="">Default Server Build</option>
-                      {agentBuilds.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          v{b.version} ({b.target_os}/{b.target_arch}) {b.is_install_default === 1 ? '★' : ''}
-                        </option>
-                      ))}
-                    </select>
+                      <SymbolIcon name="arrow.triangle.2.circlepath" className="w-3.5 h-3.5" />
+                      <span>Update all outdated ({agents.filter((a) => a.isOutdated).length})</span>
+                    </button>
                   )}
 
                   <button
@@ -871,12 +884,59 @@ export const Updates: React.FC = () => {
                     disabled={selectedAgentIds.length === 0}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
                       selectedAgentIds.length > 0
-                        ? 'bg-brand-600 hover:bg-brand-500 text-white shadow-sm'
+                        ? 'bg-surface-active text-white border border-surface-borderLight shadow-sm hover:bg-surface-hover'
                         : 'bg-surface text-slate-500 cursor-not-allowed border border-surface-border'
                     }`}
                   >
                     Update Selected ({selectedAgentIds.length})
                   </button>
+
+                  <button
+                    onClick={() => setShowAdvancedBuilds(!showAdvancedBuilds)}
+                    className={`px-2.5 py-1.5 rounded-xl text-xs font-medium border transition flex items-center gap-1.5 ${
+                      showAdvancedBuilds
+                        ? 'bg-surface-active text-white border-surface-borderLight'
+                        : 'bg-surface-card hover:bg-surface-hover text-slate-400 border-surface-border'
+                    }`}
+                    title="Toggle custom uploaded builds & manual version override"
+                  >
+                    <SymbolIcon name="slider.horizontal.3" className="w-3.5 h-3.5" />
+                    <span>Advanced</span>
+                  </button>
+
+                  {showAdvancedBuilds && (
+                    <>
+                      {agentBuilds.length > 0 && selectedAgentIds.length > 0 && (
+                        <select
+                          value={bulkTargetBuildId}
+                          onChange={(e) => setBulkTargetBuildId(e.target.value)}
+                          className="px-2.5 py-1.5 rounded-xl bg-surface-card border border-surface-border text-xs text-slate-200 focus:outline-none"
+                        >
+                          <option value="">Default Server Build</option>
+                          {agentBuilds.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              v{b.version} ({b.target_os}/{b.target_arch}) {b.is_install_default === 1 ? '★' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      <button
+                        onClick={() => setIsBuildsDrawerOpen(true)}
+                        className="px-3 py-1.5 bg-surface-card hover:bg-surface-hover text-slate-200 border border-surface-border rounded-xl text-xs font-medium transition"
+                      >
+                        Manage Builds ({agentBuilds.length})
+                      </button>
+
+                      <button
+                        onClick={() => setIsUploadAgentModalOpen(true)}
+                        className="px-3 py-1.5 bg-surface-card hover:bg-surface-hover text-slate-200 border border-surface-border rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
+                      >
+                        <SymbolIcon name="arrow.up.circle" className="w-3.5 h-3.5 text-brand-400" />
+                        <span>Upload Build</span>
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -931,9 +991,20 @@ export const Updates: React.FC = () => {
                         </td>
                         <td className="p-3.5 text-slate-400 capitalize">{ag.platform}</td>
                         <td className="p-3.5">
-                          <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-brand-500/10 text-brand-300 border border-brand-500/20">
-                            v{ag.agentVersion}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-brand-500/10 text-brand-300 border border-brand-500/20">
+                              v{ag.agentVersion}
+                            </span>
+                            {ag.isOutdated ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                Outdated
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                Up to date
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="p-3.5">
                           <span
